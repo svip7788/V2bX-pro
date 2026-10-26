@@ -34,7 +34,11 @@ type Limiter struct {
 	aliveList     map[int]int
 	dyWhitelist   map[int]struct{}
 	dyTimeRanges  []timeRange
+	btBanDuration time.Duration
+	btBanned      sync.Map // taguuid -> int64 (ban expiry, unix nano)
 }
+
+const defaultBTBanDuration = 2 * time.Minute
 
 type UserLimitInfo struct {
 	UID               int
@@ -124,8 +128,12 @@ func (s *userDeviceState) markReported() {
 
 func AddLimiter(tag string, l *conf.LimitConfig, users []panel.UserInfo, aliveList map[int]int) *Limiter {
 	info := &Limiter{
-		SpeedLimit: l.SpeedLimit,
-		aliveList:  aliveList,
+		SpeedLimit:    l.SpeedLimit,
+		aliveList:     aliveList,
+		btBanDuration: defaultBTBanDuration,
+	}
+	if l.BTBanMinutes > 0 {
+		info.btBanDuration = time.Duration(l.BTBanMinutes) * time.Minute
 	}
 	if l.DynamicSpeedLimitConfig != nil {
 		info.dyWhitelist = parseWhitelist(l.DynamicSpeedLimitConfig.DyLimitWhiteUserID)
@@ -172,6 +180,7 @@ func (l *Limiter) UpdateUser(tag string, added []panel.UserInfo, deleted []panel
 		l.userLimitInfo.Delete(key)
 		l.userDevices.Delete(key)
 		l.speedLimiter.Delete(key)
+		l.btBanned.Delete(key)
 		l.uuidToUID.Delete(deleted[i].Uuid)
 		l.aliveMu.Lock()
 		delete(l.aliveList, deleted[i].Id)
@@ -231,6 +240,9 @@ func (l *Limiter) UpdateDynamicSpeedLimit(tag, uuid string, limit int, expire ti
 
 func (l *Limiter) CheckLimit(taguuid string, ip string, isTcp bool, noSSUDP bool) (Bucket *ratelimit.Bucket, Reject bool) {
 	ip = strings.TrimPrefix(ip, "::ffff:")
+	if l.isBitTorrentBanned(taguuid) {
+		return nil, true
+	}
 
 	nodeLimit := l.SpeedLimit
 	userLimit := 0
@@ -289,6 +301,29 @@ func (l *Limiter) CheckLimit(taguuid string, ip string, isTcp bool, noSSUDP bool
 	}
 	l.speedLimiter.Delete(taguuid)
 	return nil, false
+}
+
+// BanBitTorrent bans the user on this node; returns false if the user was already banned.
+func (l *Limiter) BanBitTorrent(taguuid string) (newly bool, d time.Duration) {
+	d = l.btBanDuration
+	if d <= 0 {
+		d = defaultBTBanDuration
+	}
+	now := time.Now()
+	prev, loaded := l.btBanned.Swap(taguuid, now.Add(d).UnixNano())
+	return !loaded || prev.(int64) <= now.UnixNano(), d
+}
+
+func (l *Limiter) isBitTorrentBanned(taguuid string) bool {
+	v, ok := l.btBanned.Load(taguuid)
+	if !ok {
+		return false
+	}
+	if v.(int64) > time.Now().UnixNano() {
+		return true
+	}
+	l.btBanned.CompareAndDelete(taguuid, v)
+	return false
 }
 
 func (l *Limiter) SetAliveList(alive map[int]int) {

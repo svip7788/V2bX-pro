@@ -619,6 +619,7 @@ func (r *Router) actionSniff(
 		} else {
 			streamSniffers = []sniff.StreamSniffer{
 				sniff.TLSClientHello,
+				sniff.HTTPTracker,
 				sniff.HTTPHost,
 				sniff.StreamDomainNameQuery,
 				sniff.BitTorrent,
@@ -679,6 +680,7 @@ func (r *Router) actionSniff(
 				sniff.STUNMessage,
 				sniff.UTP,
 				sniff.UDPTracker,
+				sniff.DHT,
 				sniff.DTLSRecord,
 				sniff.NTP,
 			}

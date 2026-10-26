@@ -13,6 +13,7 @@ import (
 	"github.com/InazumaV/V2bX/common/probe"
 	"github.com/InazumaV/V2bX/common/rate"
 	"github.com/InazumaV/V2bX/limiter"
+	llog "github.com/sirupsen/logrus"
 
 	"github.com/xtls/xray-core/app/dispatcher"
 	"github.com/xtls/xray-core/common"
@@ -34,6 +35,8 @@ import (
 )
 
 var errSniffingTimeout = errors.New("timeout on sniffing")
+
+const bittorrentProtocol = "bittorrent"
 
 var sniffBufPool = sync.Pool{
 	New: func() interface{} {
@@ -517,6 +520,26 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 			if err != nil {
 				errors.LogError(ctx, "get limiter ", sessionInbound.Tag, " error: ", err)
 			}
+		}
+		if l != nil && protocol == bittorrentProtocol {
+			email := sessionInbound.User.Email
+			newly, banFor := l.BanBitTorrent(email)
+			closed := 0
+			if v, ok := d.LinkManagers.Load(email); ok {
+				closed = v.(*LinkManager).CloseAll()
+			}
+			if newly {
+				llog.WithFields(llog.Fields{
+					"user":   email,
+					"ip":     sessionInbound.Source.Address.String(),
+					"dest":   destination.String(),
+					"ban":    banFor.String(),
+					"closed": closed,
+				}).Warn("BitTorrent detected, user banned on this node")
+			}
+			common.Close(link.Writer)
+			common.Interrupt(link.Reader)
+			return
 		}
 		if l != nil {
 			var destStr string

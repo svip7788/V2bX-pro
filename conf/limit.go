@@ -4,6 +4,7 @@ type LimitConfig struct {
 	SpeedLimit              int                      `json:"SpeedLimit"`
 	EnableDynamicSpeedLimit bool                     `json:"EnableDynamicSpeedLimit"`
 	DynamicSpeedLimitConfig *DynamicSpeedLimitConfig `json:"DynamicSpeedLimitConfig"`
+	BTBanMinutes            int                      `json:"BTBanMinutes"` // ban user on this node after BitTorrent is detected, default 2
 }
 
 type DynamicSpeedLimitConfig struct {

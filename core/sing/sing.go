@@ -6,6 +6,7 @@ import (
 	"os"
 	"sync"
 
+	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/include"
 	"github.com/sagernet/sing-box/log"
 
@@ -83,6 +84,7 @@ func New(c *conf.CoreConfig) (vCore.Core, error) {
 			llog.Info("No custom DNS configured for sing-box, using system resolver")
 		}
 	}
+	ensureSniffRule(&options)
 	os.Setenv("SING_DNS_PATH", "")
 	b, err := box.New(box.Options{
 		Context: ctx,
@@ -146,4 +148,22 @@ func defaultSingDNS(ctx context.Context) (*option.DNSOptions, error) {
 		return nil, err
 	}
 	return opts.DNS, nil
+}
+
+// sing-box 1.11+ ignores inbound sniff fields; metadata.Protocol is only set by a route "sniff" action,
+// and the BitTorrent ban in HookServer depends on it.
+func ensureSniffRule(options *option.Options) {
+	if options.Route == nil {
+		options.Route = &option.RouteOptions{}
+	}
+	for _, r := range options.Route.Rules {
+		if (r.Type == "" || r.Type == C.RuleTypeDefault) && r.DefaultOptions.Action == C.RuleActionTypeSniff {
+			return
+		}
+	}
+	sniff := option.Rule{
+		Type:           C.RuleTypeDefault,
+		DefaultOptions: option.DefaultRule{RuleAction: option.RuleAction{Action: C.RuleActionTypeSniff}},
+	}
+	options.Route.Rules = append([]option.Rule{sniff}, options.Route.Rules...)
 }

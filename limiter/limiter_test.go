@@ -43,3 +43,30 @@ func TestMarkOnlineDeviceReportedAllowsSameIPCarryover(t *testing.T) {
 		t.Fatal("new ip should still be rejected while alive count is full")
 	}
 }
+
+func TestBanBitTorrentRejectsUser(t *testing.T) {
+	Init()
+	lim := AddLimiter("tag", &conf.LimitConfig{}, []panel.UserInfo{
+		{Id: 1, Uuid: "u1"},
+		{Id: 2, Uuid: "u2"},
+	}, map[int]int{})
+
+	banned := format.UserTag("tag", "u1")
+	if newly, _ := lim.BanBitTorrent(banned); !newly {
+		t.Fatal("first ban should be reported as new")
+	}
+	if newly, _ := lim.BanBitTorrent(banned); newly {
+		t.Fatal("repeated ban within duration should not be reported as new")
+	}
+	if _, reject := lim.CheckLimit(banned, "1.1.1.1", true, true); !reject {
+		t.Fatal("banned user should be rejected")
+	}
+	if _, reject := lim.CheckLimit(format.UserTag("tag", "u2"), "1.1.1.1", true, true); reject {
+		t.Fatal("other users should not be affected")
+	}
+
+	lim.btBanned.Store(banned, int64(0))
+	if _, reject := lim.CheckLimit(banned, "1.1.1.1", true, true); reject {
+		t.Fatal("expired ban should be lifted")
+	}
+}

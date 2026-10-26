@@ -3,6 +3,7 @@ package dispatcher
 import (
 	"context"
 
+	singsniff "github.com/sagernet/sing-box/common/sniff"
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/net"
@@ -34,15 +35,7 @@ type Sniffer struct {
 }
 
 func NewSniffer(ctx context.Context) *Sniffer {
-	ret := &Sniffer{
-		sniffer: []protocolSnifferWithMetadata{
-			{func(c context.Context, b []byte) (SniffResult, error) { return http.SniffHTTP(b, c) }, false, net.Network_TCP},
-			{func(c context.Context, b []byte) (SniffResult, error) { return tls.SniffTLS(b) }, false, net.Network_TCP},
-			{func(c context.Context, b []byte) (SniffResult, error) { return bittorrent.SniffBittorrent(b) }, false, net.Network_TCP},
-			{func(c context.Context, b []byte) (SniffResult, error) { return quic.SniffQUIC(b) }, false, net.Network_UDP},
-			{func(c context.Context, b []byte) (SniffResult, error) { return bittorrent.SniffUTP(b) }, false, net.Network_UDP},
-		},
-	}
+	ret := &Sniffer{sniffer: contentSniffers()}
 	if sniffer, err := newFakeDNSSniffer(ctx); err == nil {
 		others := ret.sniffer
 		ret.sniffer = append(ret.sniffer, sniffer)
@@ -54,7 +47,40 @@ func NewSniffer(ctx context.Context) *Sniffer {
 	return ret
 }
 
+func contentSniffers() []protocolSnifferWithMetadata {
+	return []protocolSnifferWithMetadata{
+		{sniffHTTPTracker, false, net.Network_TCP},
+		{func(c context.Context, b []byte) (SniffResult, error) { return http.SniffHTTP(b, c) }, false, net.Network_TCP},
+		{func(c context.Context, b []byte) (SniffResult, error) { return tls.SniffTLS(b) }, false, net.Network_TCP},
+		{func(c context.Context, b []byte) (SniffResult, error) { return bittorrent.SniffBittorrent(b) }, false, net.Network_TCP},
+		{func(c context.Context, b []byte) (SniffResult, error) { return quic.SniffQUIC(b) }, false, net.Network_UDP},
+		{func(c context.Context, b []byte) (SniffResult, error) { return bittorrent.SniffUTP(b) }, false, net.Network_UDP},
+		{sniffBitTorrentUDP, false, net.Network_UDP},
+	}
+}
+
 var errUnknownContent = errors.New("unknown content")
+
+var errNotBitTorrent = errors.New("not bittorrent")
+
+func sniffHTTPTracker(_ context.Context, b []byte) (SniffResult, error) {
+	ok, needMore := singsniff.IsHTTPTrackerRequest(b)
+	if ok {
+		return &bittorrent.SniffHeader{}, nil
+	}
+	if needMore {
+		return nil, common.ErrNoClue
+	}
+	return nil, errNotBitTorrent
+}
+
+// sniffBitTorrentUDP covers DHT and UDP tracker packets, which stay plaintext under MSE/PE.
+func sniffBitTorrentUDP(_ context.Context, b []byte) (SniffResult, error) {
+	if singsniff.IsDHTMessage(b) || singsniff.IsUDPTrackerConnect(b) {
+		return &bittorrent.SniffHeader{}, nil
+	}
+	return nil, errNotBitTorrent
+}
 
 func (s *Sniffer) Sniff(c context.Context, payload []byte, network net.Network) (SniffResult, error) {
 	var pendingSniffer []protocolSnifferWithMetadata

@@ -460,6 +460,9 @@ EOF
   "route": {
     "rules": [
       {
+        "action": "sniff"
+      },
+      {
         "ip_is_private": true,
         "outbound": "block"
       },

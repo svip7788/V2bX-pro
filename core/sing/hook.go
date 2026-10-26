@@ -14,10 +14,12 @@ import (
 
 	"github.com/InazumaV/V2bX/common/counter"
 	"github.com/sagernet/sing-box/adapter"
+	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing/common/buf"
 	"github.com/sagernet/sing/common/bufio"
 	N "github.com/sagernet/sing/common/network"
+	llog "github.com/sirupsen/logrus"
 )
 
 var _ adapter.ConnectionTracker = (*HookServer)(nil)
@@ -40,6 +42,11 @@ func (h *HookServer) RoutedConnection(ctx context.Context, conn net.Conn, m adap
 	}
 	taguuid := format.UserTag(m.Inbound, m.User)
 	ip := m.Source.Addr.String()
+	if m.Protocol == C.ProtocolBitTorrent {
+		h.banBitTorrent(l, taguuid, m)
+		conn.Close()
+		return conn
+	}
 	if b, r := l.CheckLimit(taguuid, ip, true, true); r {
 		conn.Close()
 		log.Info("[", m.Inbound, "] ", "Limited ", m.User, " by ip or conn")
@@ -117,6 +124,21 @@ func replyLatencyProbe(conn net.Conn, m adapter.InboundContext) (net.Conn, bool)
 	return bufio.NewCachedConn(conn, buffer), false
 }
 
+func (h *HookServer) banBitTorrent(l *limiter.Limiter, taguuid string, m adapter.InboundContext) {
+	newly, d := l.BanBitTorrent(taguuid)
+	closed := h.closeUserConnections(taguuid)
+	if newly {
+		llog.WithFields(llog.Fields{
+			"tag":    m.Inbound,
+			"user":   m.User,
+			"ip":     m.Source.Addr.String(),
+			"dest":   m.Destination.String(),
+			"ban":    d.String(),
+			"closed": closed,
+		}).Warn("BitTorrent detected, user banned on this node")
+	}
+}
+
 func (h *HookServer) getCounter(tag string) *counter.TrafficCounter {
 	if c, ok := h.counter.Load(tag); ok {
 		return c.(*counter.TrafficCounter)
@@ -170,6 +192,11 @@ func (h *HookServer) RoutedPacketConnection(ctx context.Context, conn N.PacketCo
 	}
 	ip := m.Source.Addr.String()
 	taguuid := format.UserTag(m.Inbound, m.User)
+	if m.Protocol == C.ProtocolBitTorrent {
+		h.banBitTorrent(l, taguuid, m)
+		conn.Close()
+		return conn
+	}
 	if b, r := l.CheckLimit(taguuid, ip, false, false); r {
 		conn.Close()
 		log.Info("[", m.Inbound, "] ", "Limited ", m.User, " by ip or conn")
