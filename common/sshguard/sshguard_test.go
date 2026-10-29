@@ -21,6 +21,17 @@ func TestNormalUsageAllowed(t *testing.T) {
 	}
 }
 
+func TestLocalTargetsExempt(t *testing.T) {
+	now := time.Now()
+	for _, host := range []string{"192.168.159.129", "d", "10.0.0.5", "127.0.0.1", "100.100.1.2", "fe80::1", "[fd00::1]", "nas.local", "pi.lan"} {
+		for i := 0; i < 100; i++ {
+			if r := check("local", host, now); r.Reject {
+				t.Fatalf("local target %s rejected", host)
+			}
+		}
+	}
+}
+
 func TestBurstBanned(t *testing.T) {
 	now := time.Now()
 	var r Result

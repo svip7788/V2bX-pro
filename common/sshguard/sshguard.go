@@ -5,6 +5,7 @@
 package sshguard
 
 import (
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +29,9 @@ const Port = 22
 
 // exempt 代码托管平台不计数、不封禁，保证 git 正常
 var exempt = []string{"github.com", "gitlab.com", "bitbucket.org", "gitee.com", "codeberg.org", "coding.net", "aliyuncs.com"}
+
+// cgnat 100.64.0.0/10，Tailscale 等组网常用
+var cgnat = netip.MustParsePrefix("100.64.0.0/10")
 
 type hit struct {
 	at   time.Time
@@ -55,8 +59,25 @@ type Result struct {
 	Reason string
 }
 
+// localSuffix 局域网主机名后缀，客户端全局/TUN 模式误把内网 ssh 送进代理时会出现
+var localSuffix = []string{".local", ".lan", ".internal", ".localdomain", ".home", ".home.arpa", ".corp"}
+
+// isExempt 代码平台、内网地址、本地主机名不可能是被爆破的外部目标，不计数
 func isExempt(host string) bool {
-	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	host = strings.ToLower(strings.TrimSuffix(strings.Trim(host, "[]"), "."))
+	if ip, err := netip.ParseAddr(host); err == nil {
+		ip = ip.Unmap()
+		return ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() ||
+			cgnat.Contains(ip)
+	}
+	if !strings.Contains(host, ".") {
+		return true
+	}
+	for _, s := range localSuffix {
+		if strings.HasSuffix(host, s) {
+			return true
+		}
+	}
 	for _, d := range exempt {
 		if host == d || strings.HasSuffix(host, "."+d) {
 			return true
