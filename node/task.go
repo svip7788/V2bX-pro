@@ -7,6 +7,7 @@ import (
 
 	"github.com/InazumaV/V2bX/api/panel"
 	"github.com/InazumaV/V2bX/common/task"
+	"github.com/InazumaV/V2bX/common/violation"
 	vCore "github.com/InazumaV/V2bX/core"
 	"github.com/InazumaV/V2bX/limiter"
 	log "github.com/sirupsen/logrus"
@@ -144,6 +145,8 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 			oldTag := c.tag
 			c.tag = c.buildNodeTag(newN)
 			limiter.DeleteLimiter(oldTag)
+			violation.Unregister(oldTag)
+			c.registerViolationSink()
 			aliveList := newA
 			if aliveList == nil {
 				aliveList = c.aliveMap

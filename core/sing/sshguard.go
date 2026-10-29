@@ -4,12 +4,19 @@ import (
 	"strconv"
 
 	"github.com/InazumaV/V2bX/common/sshguard"
+	"github.com/InazumaV/V2bX/common/violation"
 	"github.com/InazumaV/V2bX/limiter"
 	"github.com/sagernet/sing-box/adapter"
 	llog "github.com/sirupsen/logrus"
 )
 
-// sshRejected 用户被识别为 SSH 爆破/扫描时拒绝其 22 端口连接
+// reportViolation 上报面板封号
+func reportViolation(l *limiter.Limiter, m adapter.InboundContext, kind, target, detail string) {
+	uid, _ := l.GetUIDByUUID(m.User)
+	violation.Report(m.Inbound, violation.Item{UID: uid, Kind: kind, Target: target, Detail: detail})
+}
+
+// sshRejected 用户被识别为 SSH 爆破/扫描时拒绝其 22 端口连接并上报
 func sshRejected(l *limiter.Limiter, m adapter.InboundContext, destStr string) bool {
 	if m.Destination.Port != sshguard.Port {
 		return false
@@ -31,6 +38,7 @@ func sshRejected(l *limiter.Limiter, m adapter.InboundContext, destStr string) b
 			"reason": r.Reason,
 			"until":  r.Until.Format("01-02 15:04"),
 		}).Warn("SSH brute force detected, port 22 blocked for user")
+		reportViolation(l, m, violation.KindSSH, host+":22", r.Reason)
 	}
 	return r.Reject
 }

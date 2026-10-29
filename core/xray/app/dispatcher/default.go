@@ -13,6 +13,7 @@ import (
 	"github.com/InazumaV/V2bX/common/counter"
 	"github.com/InazumaV/V2bX/common/probe"
 	"github.com/InazumaV/V2bX/common/rate"
+	"github.com/InazumaV/V2bX/common/violation"
 	"github.com/InazumaV/V2bX/limiter"
 	llog "github.com/sirupsen/logrus"
 
@@ -540,6 +541,7 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 					"closed": closed,
 				}).Warn("BitTorrent detected, user banned on this node")
 			}
+			reportViolation(sessionInbound, l, violation.KindBT, destination.NetAddr(), "检测到 BitTorrent 协议")
 			common.Close(link.Writer)
 			common.Interrupt(link.Reader)
 			return

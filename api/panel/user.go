@@ -158,6 +158,17 @@ func (c *Client) ReportUserTraffic(ctx context.Context, userTraffic []UserTraffi
 	return nil
 }
 
+// ReportViolations 上报违规用户（BT、SSH 爆破），面板收到即封号
+func (c *Client) ReportViolations(ctx context.Context, items any) error {
+	path := c.apiPath("/api/v1/server/UniProxy/violation")
+	r, err := c.client.R().
+		SetContext(ctx).
+		SetBody(items).
+		ForceContentType("application/json").
+		Post(path)
+	return c.checkResponse(r, path, err)
+}
+
 func (c *Client) ReportNodeOnlineUsers(ctx context.Context, data *map[int][]string) error {
 	path := c.apiPath("/api/v1/server/UniProxy/alive")
 	r, err := c.client.R().

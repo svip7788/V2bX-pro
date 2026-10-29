@@ -9,6 +9,7 @@ import (
 	"github.com/InazumaV/V2bX/common/format"
 	"github.com/InazumaV/V2bX/common/probe"
 	"github.com/InazumaV/V2bX/common/rate"
+	"github.com/InazumaV/V2bX/common/violation"
 
 	"github.com/InazumaV/V2bX/limiter"
 
@@ -147,6 +148,7 @@ func (h *HookServer) banBitTorrent(l *limiter.Limiter, taguuid string, m adapter
 			"closed": closed,
 		}).Warn("BitTorrent detected, user banned on this node")
 	}
+	reportViolation(l, m, violation.KindBT, m.Destination.String(), "检测到 BitTorrent 协议")
 }
 
 func (h *HookServer) getCounter(tag string) *counter.TrafficCounter {

@@ -12,6 +12,7 @@ import (
 	"github.com/InazumaV/V2bX/api/panel"
 	"github.com/InazumaV/V2bX/common/portreserve"
 	"github.com/InazumaV/V2bX/common/task"
+	"github.com/InazumaV/V2bX/common/violation"
 	"github.com/InazumaV/V2bX/conf"
 	vCore "github.com/InazumaV/V2bX/core"
 	"github.com/InazumaV/V2bX/limiter"
@@ -96,6 +97,7 @@ func (c *Controller) Start() error {
 		return fmt.Errorf("update rule error: %s", err)
 	}
 	c.limiter = l
+	c.registerViolationSink()
 	c.info = node
 	c.applyPanelCertConfig(node)
 	if node.Security == panel.Tls {
@@ -131,6 +133,14 @@ func (c *Controller) Start() error {
 		c.tryStartWebSocket()
 	}
 	return nil
+}
+
+func (c *Controller) registerViolationSink() {
+	violation.Register(c.tag, func(items []violation.Item) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		return c.apiClient.ReportViolations(ctx, items)
+	})
 }
 
 // MachineWSBridge 机器模式下共享的 WS 连接
@@ -205,6 +215,7 @@ func (c *Controller) Close() error {
 		c.wsClient.Close()
 	}
 	limiter.DeleteLimiter(c.tag)
+	violation.Unregister(c.tag)
 	if c.nodeInfoMonitorPeriodic != nil {
 		c.nodeInfoMonitorPeriodic.Close()
 	}
