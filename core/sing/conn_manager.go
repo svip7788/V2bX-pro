@@ -66,9 +66,10 @@ type trackedConn struct {
 	N.ExtendedConn
 	manager *userConnManager
 	once    sync.Once
+	onClose func()
 }
 
-func newTrackedConn(conn net.Conn, manager *userConnManager) net.Conn {
+func newTrackedConn(conn net.Conn, manager *userConnManager, onClose func()) net.Conn {
 	extended, ok := conn.(N.ExtendedConn)
 	if !ok {
 		extended = bufio.NewExtendedConn(conn)
@@ -76,6 +77,7 @@ func newTrackedConn(conn net.Conn, manager *userConnManager) net.Conn {
 	tracked := &trackedConn{
 		ExtendedConn: extended,
 		manager:      manager,
+		onClose:      onClose,
 	}
 	manager.Add(tracked)
 	return tracked
@@ -85,6 +87,9 @@ func (c *trackedConn) Close() error {
 	err := c.ExtendedConn.Close()
 	c.once.Do(func() {
 		c.manager.Remove(c)
+		if c.onClose != nil {
+			c.onClose()
+		}
 	})
 	return err
 }
@@ -93,12 +98,14 @@ type trackedPacketConn struct {
 	N.PacketConn
 	manager *userConnManager
 	once    sync.Once
+	onClose func()
 }
 
-func newTrackedPacketConn(conn N.PacketConn, manager *userConnManager) N.PacketConn {
+func newTrackedPacketConn(conn N.PacketConn, manager *userConnManager, onClose func()) N.PacketConn {
 	tracked := &trackedPacketConn{
 		PacketConn: conn,
 		manager:    manager,
+		onClose:    onClose,
 	}
 	manager.Add(tracked)
 	return tracked
@@ -108,6 +115,9 @@ func (c *trackedPacketConn) Close() error {
 	err := c.PacketConn.Close()
 	c.once.Do(func() {
 		c.manager.Remove(c)
+		if c.onClose != nil {
+			c.onClose()
+		}
 	})
 	return err
 }

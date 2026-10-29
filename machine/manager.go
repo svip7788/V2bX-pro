@@ -152,7 +152,9 @@ func (m *Manager) connectWS() {
 		log.WithField("err", err).Warn("Machine WS connect failed, will retry later")
 		return
 	}
-	ws.SetDirectHandler(func(evt panel.WSEvent) bool { return m.terms.handle(evt.Event, evt.Data) })
+	ws.SetDirectHandler(func(evt panel.WSEvent) bool {
+		return m.terms.handle(evt.Event, evt.Data) || m.handleLive(evt)
+	})
 	m.wsMu.Lock()
 	m.ws = ws
 	m.wsMu.Unlock()

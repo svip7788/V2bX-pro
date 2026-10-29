@@ -57,6 +57,8 @@ type MachineClient struct {
 	token     string
 }
 
+func (c *MachineClient) APIHost() string { return c.apiHost }
+
 func NewMachineClient(c *conf.MachineConfig) (*MachineClient, error) {
 	if !c.Enabled() {
 		return nil, fmt.Errorf("machine config incomplete")

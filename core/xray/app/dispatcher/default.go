@@ -571,6 +571,11 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 					return
 				}
 			}
+			if sshRejected(sessionInbound, l, destination, destStr) {
+				common.Close(link.Writer)
+				common.Interrupt(link.Reader)
+				return
+			}
 		}
 	}
 
@@ -653,6 +658,11 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 		log.Record(accessMessage)
 	}
 
+	if lc := liveOpen(sessionInbound, l, destination, protocol, handler); lc != nil {
+		sessionInbound.CanSpliceCopy = 3
+		link = &transport.Link{Reader: &liveReader{Reader: link.Reader, c: lc}, Writer: &liveWriter{Writer: link.Writer, c: lc}}
+		defer lc.Close()
+	}
 	handler.Dispatch(ctx, link)
 }
 

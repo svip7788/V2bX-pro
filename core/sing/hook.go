@@ -33,7 +33,7 @@ func (h *HookServer) ModeList() []string {
 	return nil
 }
 
-func (h *HookServer) RoutedConnection(ctx context.Context, conn net.Conn, m adapter.InboundContext, _ adapter.Rule, _ adapter.Outbound) net.Conn {
+func (h *HookServer) RoutedConnection(ctx context.Context, conn net.Conn, m adapter.InboundContext, _ adapter.Rule, o adapter.Outbound) net.Conn {
 	l, err := limiter.GetLimiter(m.Inbound)
 	if err != nil {
 		log.Warn("get limiter for ", m.Inbound, " error: ", err)
@@ -65,6 +65,10 @@ func (h *HookServer) RoutedConnection(ctx context.Context, conn net.Conn, m adap
 		conn.Close()
 		return conn
 	}
+	if sshRejected(l, m, destStr) {
+		conn.Close()
+		return conn
+	}
 	if m.Destination.Port == probe.Port {
 		var answered bool
 		if conn, answered = replyLatencyProbe(conn, m); answered {
@@ -73,7 +77,13 @@ func (h *HookServer) RoutedConnection(ctx context.Context, conn net.Conn, m adap
 	}
 	t := h.getCounter(m.Inbound)
 	conn = counter.NewConnCounter(conn, t.GetCounter(m.User))
-	conn = newTrackedConn(conn, h.getConnManager(taguuid))
+	var onClose func()
+	if lc := liveOpen(l, m, o); lc != nil {
+		s := &counter.TrafficStorage{}
+		conn = counter.NewConnCounter(conn, s)
+		onClose = func() { liveClose(lc, s) }
+	}
+	conn = newTrackedConn(conn, h.getConnManager(taguuid), onClose)
 	// Safety net: untrack and close when the per-connection context is
 	// cancelled, in case sing-box ends the connection without calling Close
 	// on our wrapper. Close is idempotent (guarded by sync.Once).
@@ -183,7 +193,7 @@ func (h *HookServer) closeTagConnections(tag string) {
 	})
 }
 
-func (h *HookServer) RoutedPacketConnection(ctx context.Context, conn N.PacketConn, m adapter.InboundContext, _ adapter.Rule, _ adapter.Outbound) N.PacketConn {
+func (h *HookServer) RoutedPacketConnection(ctx context.Context, conn N.PacketConn, m adapter.InboundContext, _ adapter.Rule, o adapter.Outbound) N.PacketConn {
 	l, err := limiter.GetLimiter(m.Inbound)
 	if err != nil {
 		log.Warn("get limiter for ", m.Inbound, " error: ", err)
@@ -217,7 +227,13 @@ func (h *HookServer) RoutedPacketConnection(ctx context.Context, conn N.PacketCo
 	}
 	t := h.getCounter(m.Inbound)
 	conn = counter.NewPacketConnCounter(conn, t.GetCounter(m.User))
-	conn = newTrackedPacketConn(conn, h.getConnManager(taguuid))
+	var onClose func()
+	if lc := liveOpen(l, m, o); lc != nil {
+		s := &counter.TrafficStorage{}
+		conn = counter.NewPacketConnCounter(conn, s)
+		onClose = func() { liveClose(lc, s) }
+	}
+	conn = newTrackedPacketConn(conn, h.getConnManager(taguuid), onClose)
 	tracked := conn
 	context.AfterFunc(ctx, func() { _ = tracked.Close() })
 	return conn
