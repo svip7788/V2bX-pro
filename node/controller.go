@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/InazumaV/V2bX/api/panel"
+	"github.com/InazumaV/V2bX/common/portreserve"
 	"github.com/InazumaV/V2bX/common/task"
 	"github.com/InazumaV/V2bX/conf"
 	vCore "github.com/InazumaV/V2bX/core"
@@ -69,6 +70,7 @@ func (c *Controller) Start() error {
 	if err != nil {
 		return fmt.Errorf("get node info error: %s", err)
 	}
+	reservePort(node)
 	// Update user
 	c.userList, err = c.apiClient.GetUserList(ctx)
 	if err != nil {
@@ -516,4 +518,16 @@ func (c *Controller) applyPanelCertConfig(node *panel.NodeInfo) {
 	}
 	c.CertConfig.RejectUnknownSni = pc.RejectUnknownSni
 	log.WithField("tag", c.tag).Info("Applied cert config from panel")
+}
+
+func reservePort(node *panel.NodeInfo) {
+	if node == nil || node.Common == nil {
+		return
+	}
+	if err := portreserve.Reserve(node.Common.ServerPort); err != nil {
+		log.WithFields(log.Fields{
+			"port": node.Common.ServerPort,
+			"err":  err,
+		}).Warn("Reserve listen port failed")
+	}
 }

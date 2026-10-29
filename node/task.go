@@ -184,6 +184,7 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 			}
 		}
 		// add new node
+		reservePort(newN)
 		err = c.server.AddNode(c.tag, newN, c.Options)
 		if err != nil {
 			log.WithFields(log.Fields{
