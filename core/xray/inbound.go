@@ -100,7 +100,8 @@ func buildInbound(option *conf.Options, nodeInfo *panel.NodeInfo, tag string) (*
 	// Set SniffingConfig
 	sniffingConfig := &coreConf.SniffingConfig{
 		Enabled:      true,
-		DestOverride: coreConf.StringList{"http", "tls"},
+		// quic：HTTP/3 流量也按域名匹配路由组（如 Gemini 走转发）
+		DestOverride: coreConf.StringList{"http", "tls", "quic"},
 	}
 	if option.XrayOptions.DisableSniffing {
 		sniffingConfig.Enabled = false

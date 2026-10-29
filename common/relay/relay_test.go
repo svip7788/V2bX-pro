@@ -38,6 +38,13 @@ func TestMatcher(t *testing.T) {
 			t.Errorf("Match(%q,%q,%d)=%v want %v", c.host, c.ip, c.port, got, c.want)
 		}
 	}
+	nf, err := NewMatcher([]string{`regexp:(^|\.)dualstack\.apiproxy-.+\.amazonaws\.com$`, "full:accounts.x.ai"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !nf.Match("dualstack.apiproxy-123.us-east-1.amazonaws.com", netip.Addr{}, 443) || !nf.Match("accounts.x.ai", netip.Addr{}, 443) || nf.Match("x.ai", netip.Addr{}, 443) {
+		t.Error("regexp/full rule mismatch")
+	}
 	if _, err := NewMatcher([]string{"port:abc"}); err == nil {
 		t.Error("expected invalid port error")
 	}
