@@ -168,6 +168,14 @@ type RawDNS struct {
 type Rules struct {
 	Regexp   []string
 	Protocol []string
+	Relay    []RelayRule
+}
+
+// RelayRule 面板路由组 action=proxy：命中 Match 的连接改走 Outbound 描述的出站
+type RelayRule struct {
+	Id       int
+	Match    []string
+	Outbound string
 }
 
 // ResetNodeInfoCache 让下次 GetNodeInfo 必定返回完整配置
@@ -341,6 +349,16 @@ func (c *Client) GetNodeInfo(ctx context.Context) (node *NodeInfo, err error) {
 				dns := []byte(strings.Join(matchs[1:], ""))
 				node.RawDNS.DNSJson = dns
 			}
+		case "proxy":
+			outbound := strings.TrimSpace(cm.Routes[i].ActionValue)
+			if outbound == "" || len(matchs) == 0 {
+				continue
+			}
+			node.Rules.Relay = append(node.Rules.Relay, RelayRule{
+				Id:       cm.Routes[i].Id,
+				Match:    matchs,
+				Outbound: outbound,
+			})
 		}
 	}
 

@@ -25,6 +25,7 @@ type Limiter struct {
 	ProtocolRules []string
 	SpeedLimit    int
 
+	relayRules    []relayRule
 	ruleMu        sync.RWMutex
 	aliveMu       sync.RWMutex
 	userLimitInfo sync.Map // taguuid -> *UserLimitInfo

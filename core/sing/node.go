@@ -425,6 +425,7 @@ func (b *Sing) AddNode(tag string, info *panel.NodeInfo, config *conf.Options) e
 	if err != nil {
 		return fmt.Errorf("add inbound error: %s", err)
 	}
+	b.addRelayOutbounds(tag, info.Rules.Relay)
 	b.nodeReportMinTrafficBytes.Store(tag, config.ReportMinTraffic*1024)
 	return nil
 }
@@ -435,6 +436,7 @@ func (b *Sing) DelNode(tag string) error {
 	if err != nil {
 		return fmt.Errorf("delete inbound error: %s", err)
 	}
+	b.removeRelayOutbounds(tag)
 	b.hookServer.closeTagConnections(tag)
 	b.hookServer.counter.Delete(tag)
 	b.nodeReportMinTrafficBytes.Delete(tag)

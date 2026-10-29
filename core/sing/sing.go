@@ -97,6 +97,11 @@ func New(c *conf.CoreConfig) (vCore.Core, error) {
 		counter: sync.Map{},
 	}
 	b.Router().AppendTracker(hs)
+	if r, ok := b.Router().(interface {
+		SetOutboundOverride(func(*adapter.InboundContext) string)
+	}); ok {
+		r.SetOutboundOverride(relayOutboundTag)
+	}
 	return &Sing{
 		ctx:        b.Router().GetCtx(),
 		box:        b,

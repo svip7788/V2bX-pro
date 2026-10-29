@@ -43,6 +43,7 @@ type Router struct {
 	trackers          []adapter.ConnectionTracker
 	platformInterface adapter.PlatformInterface
 	started           bool
+	outboundOverride  func(metadata *adapter.InboundContext) string
 }
 
 func NewRouter(ctx context.Context, logFactory log.Factory, options option.RouteOptions, dnsOptions option.DNSOptions) *Router {

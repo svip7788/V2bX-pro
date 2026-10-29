@@ -5,6 +5,7 @@ package dispatcher
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +31,8 @@ import (
 	"github.com/xtls/xray-core/features/routing"
 	routing_session "github.com/xtls/xray-core/features/routing/session"
 	"github.com/xtls/xray-core/features/stats"
+	"github.com/xtls/xray-core/proxy"
+	"github.com/xtls/xray-core/proxy/blackhole"
 	"github.com/xtls/xray-core/transport"
 	"github.com/xtls/xray-core/transport/pipe"
 )
@@ -625,6 +628,13 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 		return
 	}
 
+	if l != nil && !isBlackhole(handler) {
+		if h := d.relayHandler(ctx, l, inTag, destination, ob); h != nil {
+			handler = h
+			isPickRoute = 2
+		}
+	}
+
 	ob.Tag = handler.Tag()
 	if accessMessage := log.AccessMessageFromContext(ctx); accessMessage != nil {
 		if tag := handler.Tag(); tag != "" {
@@ -642,6 +652,40 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 	}
 
 	handler.Dispatch(ctx, link)
+}
+
+func isBlackhole(h outbound.Handler) bool {
+	g, ok := h.(interface{ GetOutbound() proxy.Outbound })
+	if !ok {
+		return false
+	}
+	_, block := g.GetOutbound().(*blackhole.Handler)
+	return block
+}
+
+// relayHandler 面板 proxy 路由组命中时换成对应的转发出站；出站缺失则保持原路由
+func (d *DefaultDispatcher) relayHandler(ctx context.Context, l *limiter.Limiter, inTag string, destination net.Destination, ob *session.Outbound) outbound.Handler {
+	var host string
+	var ip netip.Addr
+	if destination.Address.Family().IsDomain() {
+		host = destination.Address.Domain()
+		if ob.Target.Address != nil && ob.Target.Address.Family().IsIP() {
+			ip, _ = netip.AddrFromSlice(ob.Target.Address.IP())
+		}
+	} else {
+		ip, _ = netip.AddrFromSlice(destination.Address.IP())
+	}
+	tag := l.MatchRelay(inTag, host, ip, uint16(destination.Port))
+	if tag == "" {
+		return nil
+	}
+	h := d.ohm.GetHandler(tag)
+	if h == nil {
+		errors.LogWarning(ctx, "relay outbound not found: ", tag)
+		return nil
+	}
+	errors.LogInfo(ctx, "relay [", tag, "] for [", destination, "]")
+	return h
 }
 
 func multiBufferBytes(mb buf.MultiBuffer) []byte {

@@ -145,6 +145,7 @@ func (r *Router) routeConnection(ctx context.Context, conn net.Conn, metadata ad
 		}
 		selectedOutbound = defaultOutbound
 	}
+	selectedOutbound = r.overrideOutbound(&metadata, selectedOutbound, N.NetworkTCP)
 
 	for _, buffer := range buffers {
 		conn = bufio.NewCachedConn(conn, buffer)
@@ -275,6 +276,7 @@ func (r *Router) routePacketConnection(ctx context.Context, conn N.PacketConn, m
 		}
 		selectedOutbound = defaultOutbound
 	}
+	selectedOutbound = r.overrideOutbound(&metadata, selectedOutbound, N.NetworkUDP)
 	for _, buffer := range packetBuffers {
 		conn = bufio.NewCachedPacketConn(conn, buffer.Buffer, buffer.Destination)
 		N.PutPacketBuffer(buffer)
