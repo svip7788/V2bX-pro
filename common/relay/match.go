@@ -137,6 +137,12 @@ func Bypass(ip netip.Addr) bool {
 		ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast()
 }
 
+// BypassHost localhost 到中继机上会解析成中继机自身
+func BypassHost(host string) bool {
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	return host == "localhost" || strings.HasSuffix(host, ".localhost")
+}
+
 func parsePortRange(v string) ([2]uint16, error) {
 	lo, hi, isRange := strings.Cut(v, "-")
 	a, err := strconv.ParseUint(strings.TrimSpace(lo), 10, 16)

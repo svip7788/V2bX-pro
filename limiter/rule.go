@@ -43,7 +43,7 @@ func (l *Limiter) CheckProtocolRule(protocol string) (reject bool) {
 
 // MatchRelay 返回命中规则的出站 tag，空串表示不转发
 func (l *Limiter) MatchRelay(nodeTag string, host string, ip netip.Addr, port uint16) string {
-	if relay.Bypass(ip) {
+	if relay.Bypass(ip) || relay.BypassHost(host) {
 		return ""
 	}
 	l.ruleMu.RLock()

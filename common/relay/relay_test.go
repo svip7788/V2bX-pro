@@ -52,6 +52,9 @@ func TestBypass(t *testing.T) {
 	if Bypass(netip.MustParseAddr("8.8.8.8")) || Bypass(netip.Addr{}) {
 		t.Error("public/invalid ip should not bypass")
 	}
+	if !BypassHost("localhost") || !BypassHost("a.localhost.") || BypassHost("openai.com") {
+		t.Error("BypassHost mismatch")
+	}
 }
 
 func TestParseOutbound(t *testing.T) {

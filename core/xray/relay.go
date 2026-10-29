@@ -48,6 +48,8 @@ func buildRelayOutbound(tag string, o *relay.Outbound) (*core.OutboundHandlerCon
 
 // addRelayOutbounds 单条转发出站失败不影响节点上线，命中时回落到原路由
 func (c *Xray) addRelayOutbounds(nodeTag string, rules []panel.RelayRule) {
+	// 重载失败重试时可能残留同名出站，xray 不允许重复 tag
+	c.removeRelayOutbounds(nodeTag)
 	for _, r := range rules {
 		o, err := relay.ParseOutbound(r.Outbound)
 		if err != nil {
