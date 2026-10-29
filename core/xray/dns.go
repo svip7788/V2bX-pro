@@ -2,10 +2,7 @@ package xray
 
 import (
 	"bytes"
-	"net"
 	"os"
-	"strconv"
-	"strings"
 
 	"encoding/json"
 
@@ -22,34 +19,6 @@ func updateDNSConfig(node *panel.NodeInfo) (err error) {
 			return err
 		}
 		err = saveDnsConfig(prettyJSON.Bytes(), dnsPath)
-	} else if len(node.RawDNS.DNSMap) != 0 {
-		dnsConfig := DNSConfig{
-			Servers: []interface{}{"localhost"},
-			Tag: "dns_inbound",
-		}
-		for _, value := range node.RawDNS.DNSMap {
-			address := value["address"].(string)
-			if strings.Contains(address, ":") && !strings.Contains(address, "/") {
-				host, port, err := net.SplitHostPort(address)
-				if err != nil {
-					return err
-				}
-				var uint16Port uint16
-				if port, err := strconv.ParseUint(port, 10, 16); err == nil {
-					uint16Port = uint16(port)
-				}
-				value["address"] = host
-				value["port"] = uint16Port
-			}
-			dnsConfig.Servers = append(dnsConfig.Servers, value)
-
-		}
-		dnsConfigJSON, err := json.MarshalIndent(dnsConfig, "", "  ")
-		if err != nil {
-			log.WithField("err", err).Error("Error marshaling dnsConfig to JSON")
-			return err
-		}
-		err = saveDnsConfig(dnsConfigJSON, dnsPath)
 	}
 	return err
 }

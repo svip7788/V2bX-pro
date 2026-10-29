@@ -161,7 +161,6 @@ type Hysteria2Node struct {
 }
 
 type RawDNS struct {
-	DNSMap  map[string]map[string]interface{}
 	DNSJson []byte
 }
 
@@ -169,6 +168,14 @@ type Rules struct {
 	Regexp   []string
 	Protocol []string
 	Relay    []RelayRule
+	DNS      []DNSRule
+}
+
+// DNSRule 面板路由组 action=dns：命中 Match 的域名改用 Server 解析
+type DNSRule struct {
+	Id     int
+	Match  []string
+	Server string
 }
 
 // RelayRule 面板路由组 action=proxy：命中 Match 的连接改走 Outbound 描述的出站
@@ -223,7 +230,6 @@ func (c *Client) GetNodeInfo(ctx context.Context) (node *NodeInfo, err error) {
 		Id:   c.NodeId,
 		Type: c.NodeType,
 		RawDNS: RawDNS{
-			DNSMap:  make(map[string]map[string]interface{}),
 			DNSJson: []byte(""),
 		},
 	}
@@ -338,13 +344,16 @@ func (c *Client) GetNodeInfo(ctx context.Context) (node *NodeInfo, err error) {
 			if len(matchs) == 0 {
 				continue
 			}
-			var domains []string
-			domains = append(domains, matchs...)
 			if matchs[0] != "main" {
-				node.RawDNS.DNSMap[strconv.Itoa(i)] = map[string]interface{}{
-					"address": cm.Routes[i].ActionValue,
-					"domains": domains,
+				server := strings.TrimSpace(cm.Routes[i].ActionValue)
+				if server == "" {
+					continue
 				}
+				node.Rules.DNS = append(node.Rules.DNS, DNSRule{
+					Id:     cm.Routes[i].Id,
+					Match:  matchs,
+					Server: server,
+				})
 			} else {
 				dns := []byte(strings.Join(matchs[1:], ""))
 				node.RawDNS.DNSJson = dns

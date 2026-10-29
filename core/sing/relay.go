@@ -1,6 +1,7 @@
 package sing
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -11,11 +12,14 @@ import (
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
 	F "github.com/sagernet/sing/common/format"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
 	"github.com/sagernet/sing/common/json"
 	llog "github.com/sirupsen/logrus"
 )
 
-// relayOutboundTag 面板 proxy 路由组命中时返回转发出站 tag
+// relayOutboundTag 面板 proxy 路由组命中时返回转发出站 tag；
+// 未转发的 TCP 连接若域名命中 dns 路由组，就地把目标改为指定上游解析出的 IP
 func relayOutboundTag(m *adapter.InboundContext) string {
 	if m.User == "" {
 		return ""
@@ -28,7 +32,26 @@ func relayOutboundTag(m *adapter.InboundContext) string {
 	if host == "" {
 		host = m.Destination.Fqdn
 	}
-	return l.MatchRelay(m.Inbound, host, m.Destination.Addr, m.Destination.Port)
+	if tag := l.MatchRelay(m.Inbound, host, m.Destination.Addr, m.Destination.Port); tag != "" {
+		return tag
+	}
+	if m.Network == N.NetworkTCP {
+		resolveDestination(l, m, host)
+	}
+	return ""
+}
+
+func resolveDestination(l *limiter.Limiter, m *adapter.InboundContext, host string) {
+	r := l.MatchDNS(host)
+	if r == nil {
+		return
+	}
+	ip, err := r.Lookup(context.Background(), host)
+	if err != nil {
+		llog.WithFields(llog.Fields{"dns": r.String(), "host": host, "err": err}).Debug("dns rule resolve failed")
+		return
+	}
+	m.Destination = M.SocksaddrFrom(ip, m.Destination.Port)
 }
 
 func (b *Sing) buildRelayOutbound(o *relay.Outbound) (string, any, error) {

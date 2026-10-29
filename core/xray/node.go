@@ -12,11 +12,6 @@ import (
 	"github.com/xtls/xray-core/features/outbound"
 )
 
-type DNSConfig struct {
-	Servers []interface{} `json:"servers"`
-	Tag     string        `json:"tag"`
-}
-
 func (c *Xray) AddNode(tag string, info *panel.NodeInfo, config *conf.Options) error {
 	err := updateDNSConfig(info)
 	if err != nil {

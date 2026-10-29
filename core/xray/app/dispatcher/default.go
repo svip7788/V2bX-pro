@@ -632,6 +632,8 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 		if h := d.relayHandler(ctx, l, inTag, destination, ob); h != nil {
 			handler = h
 			isPickRoute = 2
+		} else {
+			resolveTarget(ctx, l, ob)
 		}
 	}
 
@@ -686,6 +688,25 @@ func (d *DefaultDispatcher) relayHandler(ctx context.Context, l *limiter.Limiter
 	}
 	errors.LogInfo(ctx, "relay [", tag, "] for [", destination, "]")
 	return h
+}
+
+// resolveTarget 域名命中面板 dns 路由组时用指定上游解析，目标改为 IP；失败保持域名
+func resolveTarget(ctx context.Context, l *limiter.Limiter, ob *session.Outbound) {
+	if ob.Target.Address == nil || !ob.Target.Address.Family().IsDomain() {
+		return
+	}
+	host := ob.Target.Address.Domain()
+	r := l.MatchDNS(host)
+	if r == nil {
+		return
+	}
+	ip, err := r.Lookup(ctx, host)
+	if err != nil {
+		errors.LogWarning(ctx, "dns [", r.String(), "] resolve ", host, " failed: ", err)
+		return
+	}
+	errors.LogInfo(ctx, "dns [", r.String(), "] resolved ", host, " to ", ip)
+	ob.Target.Address = net.IPAddress(ip.AsSlice())
 }
 
 func multiBufferBytes(mb buf.MultiBuffer) []byte {

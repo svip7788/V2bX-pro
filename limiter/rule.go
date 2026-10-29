@@ -6,6 +6,7 @@ import (
 
 	"github.com/InazumaV/V2bX/api/panel"
 	"github.com/InazumaV/V2bX/common/relay"
+	"github.com/InazumaV/V2bX/common/resolver"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -13,6 +14,11 @@ type relayRule struct {
 	id      int
 	ref     string
 	matcher *relay.Matcher
+}
+
+type dnsRule struct {
+	matcher  *relay.Matcher
+	resolver *resolver.Resolver
 }
 
 func (l *Limiter) CheckDomainRule(destination string) (reject bool) {
@@ -60,6 +66,25 @@ func (l *Limiter) MatchRelay(nodeTag string, host string, ip netip.Addr, port ui
 	return ""
 }
 
+// MatchDNS 返回命中 dns 路由组的解析器，nil 表示用默认解析
+func (l *Limiter) MatchDNS(host string) *resolver.Resolver {
+	if host == "" || relay.BypassHost(host) {
+		return nil
+	}
+	if _, err := netip.ParseAddr(host); err == nil {
+		return nil
+	}
+	l.ruleMu.RLock()
+	rules := l.dnsRules
+	l.ruleMu.RUnlock()
+	for i := range rules {
+		if rules[i].matcher.Match(host, netip.Addr{}, 0) {
+			return rules[i].resolver
+		}
+	}
+	return nil
+}
+
 func (l *Limiter) UpdateRule(rule *panel.Rules) error {
 	rules := make([]*regexp.Regexp, 0, len(rule.Regexp))
 	for i := range rule.Regexp {
@@ -85,10 +110,27 @@ func (l *Limiter) UpdateRule(rule *panel.Rules) error {
 			relayRules = append(relayRules, relayRule{id: r.Id, ref: o.Ref, matcher: m})
 		}
 	}
+	dnsRules := make([]dnsRule, 0, len(rule.DNS))
+	for _, r := range rule.DNS {
+		res, err := resolver.Get(r.Server)
+		if err != nil {
+			log.WithFields(log.Fields{"route": r.Id, "err": err}).Warn("Skip invalid dns server")
+			continue
+		}
+		m, err := relay.NewMatcher(r.Match)
+		if err != nil {
+			log.WithFields(log.Fields{"route": r.Id, "err": err}).Warn("Skip invalid dns rule")
+			continue
+		}
+		if !m.Empty() {
+			dnsRules = append(dnsRules, dnsRule{matcher: m, resolver: res})
+		}
+	}
 	l.ruleMu.Lock()
 	l.DomainRules = rules
 	l.ProtocolRules = rule.Protocol
 	l.relayRules = relayRules
+	l.dnsRules = dnsRules
 	l.ruleMu.Unlock()
 	return nil
 }

@@ -26,6 +26,7 @@ type Limiter struct {
 	SpeedLimit    int
 
 	relayRules    []relayRule
+	dnsRules      []dnsRule
 	ruleMu        sync.RWMutex
 	aliveMu       sync.RWMutex
 	userLimitInfo sync.Map // taguuid -> *UserLimitInfo
