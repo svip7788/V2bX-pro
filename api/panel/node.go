@@ -56,6 +56,7 @@ type CommonNode struct {
 	ServerPort int              `json:"server_port"`
 	ServerName string           `json:"server_name"`
 	Routes     []Route          `json:"routes"`
+	AllowBT    bool             `json:"allow_bt"`
 	BaseConfig *BaseConfig      `json:"base_config"`
 	CertConfig *PanelCertConfig `json:"cert_config"`
 }
@@ -165,6 +166,8 @@ type RawDNS struct {
 }
 
 type Rules struct {
+	// AllowBT 面板对该节点放行 BT：不拦截、不封禁、不上报
+	AllowBT  bool
 	Regexp   []string
 	Protocol []string
 	Relay    []RelayRule
@@ -370,6 +373,8 @@ func (c *Client) GetNodeInfo(ctx context.Context) (node *NodeInfo, err error) {
 			})
 		}
 	}
+
+	node.Rules.AllowBT = cm.AllowBT
 
 	// set interval
 	node.PushInterval = intervalToTime(cm.BaseConfig.PushInterval)

@@ -6,6 +6,20 @@ import (
 	"github.com/InazumaV/V2bX/api/panel"
 )
 
+func TestAllowBitTorrentFollowsRules(t *testing.T) {
+	l := &Limiter{}
+	if l.AllowBitTorrent() {
+		t.Fatal("default should block BT")
+	}
+	if err := l.UpdateRule(&panel.Rules{AllowBT: true}); err != nil || !l.AllowBitTorrent() {
+		t.Fatal("AllowBT not applied")
+	}
+	_ = l.UpdateRule(&panel.Rules{})
+	if l.AllowBitTorrent() {
+		t.Fatal("AllowBT not reset")
+	}
+}
+
 func TestMatchDNS(t *testing.T) {
 	l := &Limiter{}
 	err := l.UpdateRule(&panel.Rules{DNS: []panel.DNSRule{

@@ -85,6 +85,11 @@ func (l *Limiter) MatchDNS(host string) *resolver.Resolver {
 	return nil
 }
 
+// AllowBitTorrent 面板为该节点放行 BT 时为 true
+func (l *Limiter) AllowBitTorrent() bool {
+	return l.allowBT.Load()
+}
+
 func (l *Limiter) UpdateRule(rule *panel.Rules) error {
 	rules := make([]*regexp.Regexp, 0, len(rule.Regexp))
 	for i := range rule.Regexp {
@@ -126,6 +131,7 @@ func (l *Limiter) UpdateRule(rule *panel.Rules) error {
 			dnsRules = append(dnsRules, dnsRule{matcher: m, resolver: res})
 		}
 	}
+	l.allowBT.Store(rule.AllowBT)
 	l.ruleMu.Lock()
 	l.DomainRules = rules
 	l.ProtocolRules = rule.Protocol

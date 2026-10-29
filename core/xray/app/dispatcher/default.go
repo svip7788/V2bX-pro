@@ -525,7 +525,7 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 				errors.LogError(ctx, "get limiter ", sessionInbound.Tag, " error: ", err)
 			}
 		}
-		if l != nil && protocol == bittorrentProtocol {
+		if l != nil && protocol == bittorrentProtocol && !l.AllowBitTorrent() {
 			email := sessionInbound.User.Email
 			newly, banFor := l.BanBitTorrent(email)
 			closed := 0

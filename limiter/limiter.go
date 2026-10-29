@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/InazumaV/V2bX/api/panel"
@@ -38,6 +39,7 @@ type Limiter struct {
 	dyTimeRanges  []timeRange
 	btBanDuration time.Duration
 	btBanned      sync.Map // taguuid -> int64 (ban expiry, unix nano)
+	allowBT       atomic.Bool
 }
 
 const defaultBTBanDuration = 2 * time.Minute

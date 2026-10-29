@@ -43,7 +43,7 @@ func (h *HookServer) RoutedConnection(ctx context.Context, conn net.Conn, m adap
 	}
 	taguuid := format.UserTag(m.Inbound, m.User)
 	ip := m.Source.Addr.String()
-	if m.Protocol == C.ProtocolBitTorrent {
+	if m.Protocol == C.ProtocolBitTorrent && !l.AllowBitTorrent() {
 		h.banBitTorrent(l, taguuid, m)
 		conn.Close()
 		return conn
@@ -204,7 +204,7 @@ func (h *HookServer) RoutedPacketConnection(ctx context.Context, conn N.PacketCo
 	}
 	ip := m.Source.Addr.String()
 	taguuid := format.UserTag(m.Inbound, m.User)
-	if m.Protocol == C.ProtocolBitTorrent {
+	if m.Protocol == C.ProtocolBitTorrent && !l.AllowBitTorrent() {
 		h.banBitTorrent(l, taguuid, m)
 		conn.Close()
 		return conn
