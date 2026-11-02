@@ -16,28 +16,28 @@ func reportViolation(l *limiter.Limiter, m adapter.InboundContext, kind, target,
 	violation.Report(m.Inbound, violation.Item{UID: uid, Kind: kind, Target: target, Detail: detail})
 }
 
-// sshRejected 用户被识别为 SSH 爆破/扫描时拒绝其 22 端口连接并上报
-func sshRejected(l *limiter.Limiter, m adapter.InboundContext, destStr string) bool {
+// sshRejected 用户被识别为 SSH 爆破/扫描时拒绝其 22 端口连接，严重时上报。
+// host 用实际连接目标而非嗅探域名，避免伪造 SNI/Host 命中白名单。
+func sshRejected(l *limiter.Limiter, m adapter.InboundContext, host string) bool {
 	if m.Destination.Port != sshguard.Port {
 		return false
-	}
-	host := m.Domain
-	if host == "" {
-		host = destStr
 	}
 	key := m.Inbound + "|" + m.User
 	if uid, ok := l.GetUIDByUUID(m.User); ok {
 		key = strconv.Itoa(uid)
 	}
 	r := sshguard.Check(key, host)
-	if r.NewBan {
+	if r.NewBan || r.Report {
 		llog.WithFields(llog.Fields{
 			"tag":    m.Inbound,
 			"user":   m.User,
 			"dest":   host,
 			"reason": r.Reason,
 			"until":  r.Until.Format("01-02 15:04"),
+			"report": r.Report,
 		}).Warn("SSH brute force detected, port 22 blocked for user")
+	}
+	if r.Report {
 		reportViolation(l, m, violation.KindSSH, host+":22", r.Reason)
 	}
 	return r.Reject
