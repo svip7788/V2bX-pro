@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/InazumaV/V2bX/api/panel"
@@ -333,10 +334,17 @@ func (c *Controller) checkDynamicSpeed() {
 			} else {
 				// 限速桶在建连时取定，断开现有连接让重连后立即按新限速走
 				closed := c.server.CloseUserConns(c.tag, uuid)
+				avgMbps := avgBytesPerSec * 8 / 1000000
+				violation.Report(c.tag, violation.Item{
+					UID:    uid,
+					Kind:   violation.KindSpeed,
+					Target: fmt.Sprintf("%dMbps", avgMbps),
+					Detail: fmt.Sprintf("%d 秒均速 %dMbps，限速 %dMbps %d 分钟", elapsed, avgMbps, limitSpeed, (limitTime+59)/60),
+				})
 				log.WithFields(log.Fields{
 					"tag":    c.tag,
 					"uid":    uid,
-					"avg":    avgBytesPerSec * 8 / 1000000,
+					"avg":    avgMbps,
 					"limit":  limitSpeed,
 					"closed": closed,
 				}).Info("Dynamic speed limit triggered")
