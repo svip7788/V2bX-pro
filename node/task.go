@@ -8,6 +8,7 @@ import (
 	"github.com/InazumaV/V2bX/api/panel"
 	"github.com/InazumaV/V2bX/common/task"
 	"github.com/InazumaV/V2bX/common/violation"
+	"github.com/InazumaV/V2bX/conf"
 	vCore "github.com/InazumaV/V2bX/core"
 	"github.com/InazumaV/V2bX/limiter"
 	log "github.com/sirupsen/logrus"
@@ -42,22 +43,9 @@ func (c *Controller) startTasks(node *panel.NodeInfo) {
 			_ = c.renewCertPeriodic.Start(true)
 		}
 	}
+	c.resetDynamicTraffic()
 	if c.LimitConfig.EnableDynamicSpeedLimit {
-		if c.LimitConfig.DynamicSpeedLimitConfig == nil {
-			log.WithField("tag", c.tag).Warn("DynamicSpeedLimitConfig is nil, skip dynamic speed limit task")
-			return
-		}
-		triggerTime := c.LimitConfig.DynamicSpeedLimitConfig.DyLimitTriggerTime
-		if triggerTime <= 0 {
-			triggerTime = 60
-		}
-		c.traffic = make(map[string]int64)
-		c.dynamicSpeedLimitPeriodic = &task.Task{
-			Interval: time.Duration(triggerTime) * time.Second,
-			Execute:  c.SpeedChecker,
-		}
 		log.Printf("[%s: %d] Start dynamic speed limit", c.apiClient.NodeType, c.apiClient.NodeId)
-		_ = c.dynamicSpeedLimitPeriodic.Start(false)
 	}
 }
 
@@ -126,7 +114,8 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 		c.info = newN
 		c.userList = nextUsers
 		c.rebuildUIDToUUID()
-		c.traffic = make(map[string]int64)
+		c.applyDynamicSpeedLimit(newN)
+		c.resetDynamicTraffic()
 		// Remove old node
 		log.WithField("tag", c.tag).Info("Node changed, reload")
 		err = c.server.DelNode(c.tag)
@@ -159,6 +148,7 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 				c.limiter.UpdateUser(c.tag, added, deleted)
 			}
 		}
+		c.limiter.SetDynamicConfig(&c.LimitConfig)
 		// update alive list
 		if newA != nil {
 			c.limiter.SetAliveList(newA)
@@ -242,20 +232,71 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 	return nil
 }
 
-func (c *Controller) SpeedChecker() error {
-	c.runtimeMu.Lock()
-	defer c.runtimeMu.Unlock()
+type localDynamicConfig struct {
+	enable bool
+	cfg    *conf.DynamicSpeedLimitConfig
+}
+
+// applyDynamicSpeedLimit 面板下发了 dynamic_speed_limit 就以面板为准，否则回落到本地配置
+func (c *Controller) applyDynamicSpeedLimit(n *panel.NodeInfo) {
+	if c.localDynamic == nil {
+		c.localDynamic = &localDynamicConfig{
+			enable: c.LimitConfig.EnableDynamicSpeedLimit,
+			cfg:    c.LimitConfig.DynamicSpeedLimitConfig,
+		}
+	}
+	enable, cfg := c.localDynamic.enable, c.localDynamic.cfg
+	if d := n.DynamicSpeedLimit; d != nil {
+		enable = d.Enable
+		cfg = &conf.DynamicSpeedLimitConfig{
+			DyLimitDuration:     d.Periods,
+			DyLimitTriggerTime:  d.TriggerTime,
+			DyLimitTriggerSpeed: d.TriggerSpeed,
+			DyLimitSpeed:        d.LimitSpeed,
+			DyLimitTime:         d.LimitTime,
+			DyLimitWhiteUserID:  d.WhiteUserIDs,
+		}
+	}
+	enable = enable && cfg != nil
+	if enable != c.LimitConfig.EnableDynamicSpeedLimit {
+		log.WithFields(log.Fields{"tag": c.tag, "enable": enable, "panel": n.DynamicSpeedLimit != nil}).
+			Info("Dynamic speed limit changed")
+	}
+	c.LimitConfig.EnableDynamicSpeedLimit = enable
+	c.LimitConfig.DynamicSpeedLimitConfig = cfg
+}
+
+func (c *Controller) resetDynamicTraffic() {
+	c.traffic = make(map[string]int64)
+	c.trafficSince = time.Now()
+}
+
+// checkDynamicSpeed 在流量上报后调用，按两次检测间的实际时长求均速，不受上报间隔影响
+func (c *Controller) checkDynamicSpeed() {
 	cfg := c.LimitConfig.DynamicSpeedLimitConfig
 	if !c.LimitConfig.EnableDynamicSpeedLimit || cfg == nil {
-		return nil
+		return
 	}
 	if !c.limiter.InDynamicLimitTimeRange() {
-		c.traffic = make(map[string]int64)
-		return nil
+		c.resetDynamicTraffic()
+		return
 	}
 	triggerTime := cfg.DyLimitTriggerTime
 	if triggerTime <= 0 {
 		triggerTime = 60
+	}
+	// 上报由 ticker 驱动但 HTTP 耗时有抖动，留半个上报间隔余量，避免刚好差一点而多等一轮
+	var slack time.Duration
+	if c.info != nil {
+		slack = c.info.PushInterval / 2
+	}
+	since := time.Since(c.trafficSince)
+	if since+slack < time.Duration(triggerTime)*time.Second {
+		return
+	}
+	elapsed := int64(since / time.Second)
+	if elapsed <= 0 {
+		return
 	}
 	triggerSpeed := cfg.DyLimitTriggerSpeed
 	if triggerSpeed <= 0 {
@@ -282,7 +323,7 @@ func (c *Controller) SpeedChecker() error {
 		if c.limiter.IsDynamicLimited(c.tag, uuid) {
 			continue
 		}
-		avgBytesPerSec := totalBytes / int64(triggerTime)
+		avgBytesPerSec := totalBytes / elapsed
 		if avgBytesPerSec >= triggerSpeedBytes {
 			err := c.limiter.UpdateDynamicSpeedLimit(c.tag, uuid,
 				limitSpeed,
@@ -290,14 +331,17 @@ func (c *Controller) SpeedChecker() error {
 			if err != nil {
 				log.WithField("err", err).Error("Update dynamic speed limit failed")
 			} else {
+				// 限速桶在建连时取定，断开现有连接让重连后立即按新限速走
+				closed := c.server.CloseUserConns(c.tag, uuid)
 				log.WithFields(log.Fields{
-					"tag":  c.tag,
-					"uuid": uuid,
-					"avg":  avgBytesPerSec * 8 / 1000000,
+					"tag":    c.tag,
+					"uid":    uid,
+					"avg":    avgBytesPerSec * 8 / 1000000,
+					"limit":  limitSpeed,
+					"closed": closed,
 				}).Info("Dynamic speed limit triggered")
 			}
 		}
 	}
-	c.traffic = make(map[string]int64)
-	return nil
+	c.resetDynamicTraffic()
 }

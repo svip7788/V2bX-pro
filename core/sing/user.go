@@ -242,6 +242,13 @@ func (b *Sing) CommitUserTraffic(tag string, trafficSlice []panel.UserTraffic) e
 	return nil
 }
 
+func (b *Sing) CloseUserConns(tag string, uuid string) int {
+	if m, ok := b.hookServer.connManagers.Load(format.UserTag(tag, uuid)); ok {
+		return m.(*userConnManager).CloseAll()
+	}
+	return 0
+}
+
 type UserDeleter interface {
 	DelUsers(uuid []string) error
 }

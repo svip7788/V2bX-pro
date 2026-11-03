@@ -157,6 +157,14 @@ func (s *Selector) DelUsers(users []panel.UserInfo, tag string, info *panel.Node
 	return t.(Core).DelUsers(users, tag, info)
 }
 
+func (s *Selector) CloseUserConns(tag string, uuid string) int {
+	t, e := s.nodes.Load(tag)
+	if !e {
+		return 0
+	}
+	return t.(Core).CloseUserConns(tag, uuid)
+}
+
 func (s *Selector) Protocols() []string {
 	protocols := make([]string, 0)
 	for i := range s.cores {

@@ -37,6 +37,8 @@ type Limiter struct {
 	aliveList     map[int]int
 	dyWhitelist   map[int]struct{}
 	dyTimeRanges  []timeRange
+	dyConfig      conf.DynamicSpeedLimitConfig
+	dyApplied     bool
 	btBanDuration time.Duration
 	btBanned      sync.Map // taguuid -> int64 (ban expiry, unix nano)
 	allowBT       atomic.Bool
@@ -139,10 +141,7 @@ func AddLimiter(tag string, l *conf.LimitConfig, users []panel.UserInfo, aliveLi
 	if l.BTBanMinutes > 0 {
 		info.btBanDuration = time.Duration(l.BTBanMinutes) * time.Minute
 	}
-	if l.DynamicSpeedLimitConfig != nil {
-		info.dyWhitelist = parseWhitelist(l.DynamicSpeedLimitConfig.DyLimitWhiteUserID)
-		info.dyTimeRanges = parseTimeRanges(l.DynamicSpeedLimitConfig.DyLimitDuration)
-	}
+	info.SetDynamicConfig(l)
 	for i := range users {
 		info.uuidToUID.Store(users[i].Uuid, users[i].Id)
 		ul := &UserLimitInfo{
@@ -212,6 +211,40 @@ func (l *Limiter) IsWhitelisted(uid int) bool {
 	}
 	_, ok := l.dyWhitelist[uid]
 	return ok
+}
+
+// SetDynamicConfig 幂等；配置变化时解除已有动态限速，让新参数立即生效。
+// 与 IsWhitelisted/InDynamicLimitTimeRange 须在同一把锁（控制器 runtimeMu）下调用
+func (l *Limiter) SetDynamicConfig(lc *conf.LimitConfig) {
+	var cur conf.DynamicSpeedLimitConfig
+	if lc.EnableDynamicSpeedLimit && lc.DynamicSpeedLimitConfig != nil {
+		cur = *lc.DynamicSpeedLimitConfig
+	}
+	if l.dyApplied && l.dyConfig == cur {
+		return
+	}
+	if l.dyApplied {
+		l.ClearDynamicSpeedLimit()
+	}
+	l.dyApplied, l.dyConfig = true, cur
+	l.dyWhitelist = parseWhitelist(cur.DyLimitWhiteUserID)
+	l.dyTimeRanges = parseTimeRanges(cur.DyLimitDuration)
+}
+
+// ClearDynamicSpeedLimit 立即解除所有用户的动态限速
+func (l *Limiter) ClearDynamicSpeedLimit() {
+	l.userLimitInfo.Range(func(k, v any) bool {
+		u := v.(*UserLimitInfo)
+		if u.DynamicSpeedLimit == 0 && u.ExpireTime == 0 {
+			return true
+		}
+		info := *u
+		info.DynamicSpeedLimit = 0
+		info.ExpireTime = 0
+		l.userLimitInfo.Store(k, &info)
+		l.speedLimiter.Delete(k)
+		return true
+	})
 }
 
 func (l *Limiter) InDynamicLimitTimeRange() bool {

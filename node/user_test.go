@@ -40,6 +40,8 @@ func (f *fakeCore) RestoreUserTraffic(string, []panel.UserTraffic) error { retur
 
 func (f *fakeCore) DelUsers([]panel.UserInfo, string, *panel.NodeInfo) error { return nil }
 
+func (f *fakeCore) CloseUserConns(string, string) int { return 0 }
+
 func (f *fakeCore) Protocols() []string { return nil }
 
 func (f *fakeCore) Type() string { return "fake" }

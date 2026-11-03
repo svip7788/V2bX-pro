@@ -20,27 +20,28 @@ import (
 )
 
 type Controller struct {
-	server                    vCore.Core
-	apiClient                 *panel.Client
-	tag                       string
-	limiter                   *limiter.Limiter
-	traffic                   map[string]int64
-	userList                  []panel.UserInfo
-	uidToUUID                 map[int]string
-	aliveMap                  map[int]int
-	info                      *panel.NodeInfo
-	nodeInfoMonitorPeriodic   *task.Task
-	userReportPeriodic        *task.Task
-	renewCertPeriodic         *task.Task
-	dynamicSpeedLimitPeriodic *task.Task
-	onlineIpReportPeriodic    *task.Task
-	wsClient                  *panel.WSClient
-	wsConnected               func() bool
-	wsStopCh                  chan struct{}
-	machineWS                 MachineWSBridge
-	machineEvents             chan panel.WSEvent
-	machineEventsDropped      atomic.Bool
-	configReloadPending       atomic.Bool
+	server                  vCore.Core
+	apiClient               *panel.Client
+	tag                     string
+	limiter                 *limiter.Limiter
+	traffic                 map[string]int64
+	trafficSince            time.Time
+	localDynamic            *localDynamicConfig
+	userList                []panel.UserInfo
+	uidToUUID               map[int]string
+	aliveMap                map[int]int
+	info                    *panel.NodeInfo
+	nodeInfoMonitorPeriodic *task.Task
+	userReportPeriodic      *task.Task
+	renewCertPeriodic       *task.Task
+	onlineIpReportPeriodic  *task.Task
+	wsClient                *panel.WSClient
+	wsConnected             func() bool
+	wsStopCh                chan struct{}
+	machineWS               MachineWSBridge
+	machineEvents           chan panel.WSEvent
+	machineEventsDropped    atomic.Bool
+	configReloadPending     atomic.Bool
 	// 重载时已删掉旧入站但未成功加回，需按拉取间隔重试，不能依赖配置是否变化
 	reloadFailed atomic.Bool
 	runtimeMu    sync.Mutex
@@ -90,6 +91,7 @@ func (c *Controller) Start() error {
 		c.tag = c.Options.Name
 	}
 
+	c.applyDynamicSpeedLimit(node)
 	// add limiter
 	l := limiter.AddLimiter(c.tag, &c.LimitConfig, c.userList, c.aliveMap)
 	// add rule limiter
@@ -224,9 +226,6 @@ func (c *Controller) Close() error {
 	}
 	if c.renewCertPeriodic != nil {
 		c.renewCertPeriodic.Close()
-	}
-	if c.dynamicSpeedLimitPeriodic != nil {
-		c.dynamicSpeedLimitPeriodic.Close()
 	}
 	if c.onlineIpReportPeriodic != nil {
 		c.onlineIpReportPeriodic.Close()

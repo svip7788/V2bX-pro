@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/InazumaV/V2bX/api/panel"
 	log "github.com/sirupsen/logrus"
@@ -149,6 +150,10 @@ func (c *Controller) addDynamicTraffic(userTraffic []panel.UserTraffic) {
 	if c.traffic == nil {
 		c.traffic = make(map[string]int64)
 	}
+	if len(c.traffic) == 0 && c.info != nil && c.info.PushInterval > 0 {
+		// 空窗口（含节点空闲期）从本次上报覆盖的区间起算，避免均速被稀释
+		c.trafficSince = time.Now().Add(-c.info.PushInterval)
+	}
 	for i := range userTraffic {
 		uuid, ok := c.uidToUUID[userTraffic[i].UID]
 		if !ok {
@@ -156,6 +161,7 @@ func (c *Controller) addDynamicTraffic(userTraffic []panel.UserTraffic) {
 		}
 		c.traffic[uuid] += userTraffic[i].Upload + userTraffic[i].Download
 	}
+	c.checkDynamicSpeed()
 }
 
 type userCompareKey struct {

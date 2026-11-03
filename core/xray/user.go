@@ -30,6 +30,13 @@ func (c *Xray) GetUserManager(tag string) (proxy.UserManager, error) {
 	return userManager, nil
 }
 
+func (c *Xray) CloseUserConns(tag string, uuid string) int {
+	if v, ok := c.dispatcher.LinkManagers.Load(format.UserTag(tag, uuid)); ok {
+		return v.(*dispatcher.LinkManager).CloseAll()
+	}
+	return 0
+}
+
 func (c *Xray) DelUsers(users []panel.UserInfo, tag string, _ *panel.NodeInfo) error {
 	userManager, err := c.GetUserManager(tag)
 	if err != nil {

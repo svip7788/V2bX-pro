@@ -30,6 +30,8 @@ type NodeInfo struct {
 	Rules        Rules
 	CertConfig   *PanelCertConfig
 
+	DynamicSpeedLimit *DynamicSpeedLimit
+
 	// origin
 	VAllss      *VAllssNode
 	Shadowsocks *ShadowsocksNode
@@ -59,6 +61,19 @@ type CommonNode struct {
 	AllowBT    bool             `json:"allow_bt"`
 	BaseConfig *BaseConfig      `json:"base_config"`
 	CertConfig *PanelCertConfig `json:"cert_config"`
+
+	DynamicSpeedLimit *DynamicSpeedLimit `json:"dynamic_speed_limit"`
+}
+
+// DynamicSpeedLimit 面板下发的动态限速；字段缺省时用本地配置，下发后以面板为准（含关闭）
+type DynamicSpeedLimit struct {
+	Enable       bool   `json:"enable"`
+	Periods      string `json:"periods"`       // "20:00-24:00,00:00-02:00"，空为全天，UTC+8
+	TriggerTime  int    `json:"trigger_time"`  // 秒
+	TriggerSpeed int    `json:"trigger_speed"` // Mbps
+	LimitSpeed   int    `json:"limit_speed"`   // Mbps
+	LimitTime    int    `json:"limit_time"`    // 秒
+	WhiteUserIDs string `json:"white_user_ids"`
 }
 
 type Route struct {
@@ -375,6 +390,7 @@ func (c *Client) GetNodeInfo(ctx context.Context) (node *NodeInfo, err error) {
 	}
 
 	node.Rules.AllowBT = cm.AllowBT
+	node.DynamicSpeedLimit = cm.DynamicSpeedLimit
 
 	// set interval
 	node.PushInterval = intervalToTime(cm.BaseConfig.PushInterval)
