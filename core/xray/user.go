@@ -3,6 +3,7 @@ package xray
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/InazumaV/V2bX/api/panel"
 	"github.com/InazumaV/V2bX/common/counter"
@@ -42,12 +43,17 @@ func (c *Xray) DelUsers(users []panel.UserInfo, tag string, _ *panel.NodeInfo) e
 	if err != nil {
 		return fmt.Errorf("get user manager error: %s", err)
 	}
+	// 不存在视为已删除：上一轮部分失败后 userList 未更新，重试时必然重删已删掉的用户，
+	// 若在此中断，该节点之后所有增删都会卡死（超额/到期用户一直能用）。
 	removedUsers := make([]string, 0, len(users))
+	var firstErr error
 	for i := range users {
 		user := format.UserTag(tag, users[i].Uuid)
-		err = userManager.RemoveUser(context.Background(), user)
-		if err != nil {
-			break
+		if e := userManager.RemoveUser(context.Background(), user); e != nil && !isUserNotFound(e) {
+			if firstErr == nil {
+				firstErr = e
+			}
+			continue
 		}
 		removedUsers = append(removedUsers, user)
 	}
@@ -74,10 +80,15 @@ func (c *Xray) DelUsers(users []panel.UserInfo, tag string, _ *panel.NodeInfo) e
 		"users":     len(removedUsers),
 		"closeConn": closed,
 	}).Infof("xray: DelUsers removed %d users, closed %d live conns", len(removedUsers), closed)
-	if err != nil {
-		return err
-	}
-	return nil
+	return firstErr
+}
+
+func isUserNotFound(err error) bool {
+	return strings.Contains(strings.ToLower(err.Error()), "not found")
+}
+
+func isUserExists(err error) bool {
+	return strings.Contains(strings.ToLower(err.Error()), "already exists")
 }
 
 func (x *Xray) GetUserTrafficSlice(tag string, reset bool) ([]panel.UserTraffic, error) {
@@ -204,20 +215,33 @@ func (c *Xray) AddUsers(p *vCore.AddUsersParams) (added int, err error) {
 	if err != nil {
 		return 0, fmt.Errorf("get user manager error: %s", err)
 	}
+	var firstErr error
+	ok := make(map[string]struct{}, len(users))
 	for _, u := range users {
-		mUser, err := u.ToMemoryUser()
-		if err != nil {
-			return 0, err
+		mUser, e := u.ToMemoryUser()
+		if e == nil {
+			e = man.AddUser(context.Background(), mUser)
+			// 已存在：上一轮部分成功的残留，按新参数覆盖
+			if e != nil && isUserExists(e) {
+				_ = man.RemoveUser(context.Background(), u.Email)
+				e = man.AddUser(context.Background(), mUser)
+			}
 		}
-		err = man.AddUser(context.Background(), mUser)
-		if err != nil {
-			return 0, err
+		if e != nil {
+			if firstErr == nil {
+				firstErr = e
+			}
+			continue
 		}
+		ok[u.Email] = struct{}{}
 	}
 	c.users.mapLock.Lock()
 	for i := range p.Users {
-		c.users.uidMap[format.UserTag(p.Tag, p.Users[i].Uuid)] = p.Users[i].Id
+		email := format.UserTag(p.Tag, p.Users[i].Uuid)
+		if _, found := ok[email]; found {
+			c.users.uidMap[email] = p.Users[i].Id
+		}
 	}
 	c.users.mapLock.Unlock()
-	return len(users), nil
+	return len(ok), firstErr
 }

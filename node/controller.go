@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"sync"
@@ -466,10 +467,12 @@ func (c *Controller) clearDynamicTrafficLocked(users []panel.UserInfo) {
 	}
 }
 
+// 删除失败也要继续添加：两者互不依赖，任一失败返回错误让 userList 不前进，下轮幂等重试。
 func (c *Controller) applyUserChangesLocked(added, deleted []panel.UserInfo) error {
+	var errs []error
 	if len(deleted) > 0 {
 		if err := c.server.DelUsers(deleted, c.tag, c.info); err != nil {
-			return fmt.Errorf("delete users error: %w", err)
+			errs = append(errs, fmt.Errorf("delete users error: %w", err))
 		}
 	}
 	if len(added) > 0 {
@@ -478,14 +481,14 @@ func (c *Controller) applyUserChangesLocked(added, deleted []panel.UserInfo) err
 			NodeInfo: c.info,
 			Users:    added,
 		}); err != nil {
-			return fmt.Errorf("add users error: %w", err)
+			errs = append(errs, fmt.Errorf("add users error: %w", err))
 		}
 	}
 	if len(added) > 0 || len(deleted) > 0 {
 		c.limiter.UpdateUser(c.tag, added, deleted)
 		c.clearDynamicTrafficLocked(deleted)
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func (c *Controller) syncUsersLocked(newUsers []panel.UserInfo, source string) error {
