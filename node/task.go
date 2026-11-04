@@ -50,8 +50,19 @@ func (c *Controller) startTasks(node *panel.NodeInfo) {
 	}
 }
 
+// WS 推送是发完即忘的，面板也不会为「自然到期」推删除；WS 在线时仍需低频轮询兜底，
+// 否则丢一条 remove 或用户到期后，节点会一直放行该用户。
+const wsFallbackPollInterval = 5 * time.Minute
+
+func (c *Controller) shouldPoll(now time.Time) bool {
+	if !c.isWebSocketConnected() || c.reloadFailed.Load() {
+		return true
+	}
+	return now.Sub(time.Unix(c.lastPollAt.Load(), 0)) >= wsFallbackPollInterval
+}
+
 func (c *Controller) periodicNodeInfoMonitor() error {
-	if c.isWebSocketConnected() && !c.reloadFailed.Load() {
+	if !c.shouldPoll(time.Now()) {
 		return nil
 	}
 	return c.nodeInfoMonitor()
@@ -60,6 +71,7 @@ func (c *Controller) periodicNodeInfoMonitor() error {
 func (c *Controller) nodeInfoMonitor() (err error) {
 	c.runtimeMu.Lock()
 	defer c.runtimeMu.Unlock()
+	c.lastPollAt.Store(time.Now().Unix())
 
 	ctx := c.currentCtx()
 	if ctx.Err() != nil {

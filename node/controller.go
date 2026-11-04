@@ -45,6 +45,7 @@ type Controller struct {
 	configReloadPending     atomic.Bool
 	// 重载时已删掉旧入站但未成功加回，需按拉取间隔重试，不能依赖配置是否变化
 	reloadFailed atomic.Bool
+	lastPollAt   atomic.Int64
 	runtimeMu    sync.Mutex
 	ctx          context.Context
 	cancel       context.CancelFunc
