@@ -131,6 +131,7 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 		c.resetDynamicTraffic()
 		// Remove old node
 		log.WithField("tag", c.tag).Info("Node changed, reload")
+		c.stashTraffic()
 		err = c.server.DelNode(c.tag)
 		if err != nil && !retrying {
 			log.WithFields(log.Fields{

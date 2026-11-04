@@ -440,5 +440,13 @@ func (b *Sing) DelNode(tag string) error {
 	b.hookServer.closeTagConnections(tag)
 	b.hookServer.counter.Delete(tag)
 	b.nodeReportMinTrafficBytes.Delete(tag)
+	prefix := tag + "|"
+	b.users.mapLock.Lock()
+	for key := range b.users.uidMap {
+		if strings.HasPrefix(key, prefix) {
+			delete(b.users.uidMap, key)
+		}
+	}
+	b.users.mapLock.Unlock()
 	return nil
 }

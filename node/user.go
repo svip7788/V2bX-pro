@@ -26,6 +26,12 @@ func (c *Controller) reportUserTrafficTask() (err error) {
 			"err": trafficErr,
 		}).Error("Get user traffic slice failed")
 	}
+	// 动态限速只看本轮新增流量，不受上报成败和积压补报影响
+	if len(userTraffic) > 0 {
+		c.addDynamicTraffic(userTraffic)
+	}
+	userTraffic = mergeTraffic(c.pendingTraffic, userTraffic)
+	c.pendingTraffic = nil
 
 	var aliveData map[int][]string
 	var onlineDeviceCount int
@@ -64,18 +70,21 @@ func (c *Controller) reportUserTrafficTask() (err error) {
 			"err": reportErr,
 		})
 		switch {
+		case panel.IsNotDelivered(reportErr):
+			c.pendingTraffic = userTraffic
+			entry.Warn("V2 report not delivered, traffic kept for next report")
 		case errors.Is(reportErr, context.Canceled), errors.Is(reportErr, context.DeadlineExceeded):
 			entry.Info("V2 report cancelled, traffic discarded")
 		case panel.IsUnsupportedReportError(reportErr):
 			entry.Info("V2 report unsupported, fallback to V1")
 			c.reportV1(userTraffic, aliveData, onlineDeviceCount)
 		default:
+			// 面板可能已入账（超时、连接中途断开），重发会重复计费
 			entry.Warn("V2 report failed, traffic discarded")
 		}
 		return nil
 	}
 	if len(userTraffic) > 0 {
-		c.addDynamicTraffic(userTraffic)
 		var totalUp, totalDown int64
 		for i := range userTraffic {
 			totalUp += userTraffic[i].Upload
@@ -99,13 +108,16 @@ func (c *Controller) reportV1(userTraffic []panel.UserTraffic, aliveData map[int
 				"tag": c.tag,
 				"err": err,
 			})
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			switch {
+			case panel.IsNotDelivered(err):
+				c.pendingTraffic = userTraffic
+				entry.Warn("V1 report not delivered, traffic kept for next report")
+			case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 				entry.Info("V1 report cancelled, traffic discarded")
-			} else {
+			default:
 				entry.Info("Report user traffic failed")
 			}
 		} else {
-			c.addDynamicTraffic(userTraffic)
 			var totalUp, totalDown int64
 			for i := range userTraffic {
 				totalUp += userTraffic[i].Upload
@@ -130,6 +142,63 @@ func (c *Controller) reportV1(userTraffic []panel.UserTraffic, aliveData map[int
 			log.WithField("tag", c.tag).Infof("Total %d online users, %d Reported", onlineDeviceCount, len(aliveData))
 		}
 	}
+}
+
+// mergeTraffic 按 UID 合并两批流量；结果数量受用户数约束，积压再久也不会无限增长
+func mergeTraffic(a, b []panel.UserTraffic) []panel.UserTraffic {
+	if len(a) == 0 {
+		return b
+	}
+	if len(b) == 0 {
+		return a
+	}
+	idx := make(map[int]int, len(a)+len(b))
+	out := make([]panel.UserTraffic, 0, len(a)+len(b))
+	for _, list := range [][]panel.UserTraffic{a, b} {
+		for _, t := range list {
+			if i, ok := idx[t.UID]; ok {
+				out[i].Upload += t.Upload
+				out[i].Download += t.Download
+				continue
+			}
+			idx[t.UID] = len(out)
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// stashTraffic 在删除入站前取走未上报的流量，留给下次上报，避免重载丢流量。须持有 runtimeMu
+func (c *Controller) stashTraffic() {
+	t, err := c.server.GetUserTrafficSlice(c.tag, true)
+	if err != nil {
+		log.WithFields(log.Fields{"tag": c.tag, "err": err}).Warn("Stash user traffic failed")
+		return
+	}
+	c.pendingTraffic = mergeTraffic(c.pendingTraffic, t)
+}
+
+// flushTraffic 关闭节点时把未上报的流量补报一次
+func (c *Controller) flushTraffic() {
+	c.runtimeMu.Lock()
+	defer c.runtimeMu.Unlock()
+	c.stashTraffic()
+	if len(c.pendingTraffic) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := c.apiClient.Report(ctx, c.pendingTraffic, nil)
+	if panel.IsUnsupportedReportError(err) {
+		err = c.apiClient.ReportUserTraffic(ctx, c.pendingTraffic)
+	}
+	entry := log.WithFields(log.Fields{"tag": c.tag, "users": len(c.pendingTraffic)})
+	if err != nil {
+		entry.WithField("err", err).Warn("Flush user traffic on close failed")
+		return
+	}
+	c.pendingTraffic = nil
+	entry.Info("Flushed user traffic on close")
 }
 
 func (c *Controller) rebuildUIDToUUID() {

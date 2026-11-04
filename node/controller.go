@@ -27,6 +27,7 @@ type Controller struct {
 	limiter                 *limiter.Limiter
 	traffic                 map[string]int64
 	trafficSince            time.Time
+	pendingTraffic          []panel.UserTraffic
 	localDynamic            *localDynamicConfig
 	userList                []panel.UserInfo
 	uidToUUID               map[int]string
@@ -232,6 +233,7 @@ func (c *Controller) Close() error {
 	if c.onlineIpReportPeriodic != nil {
 		c.onlineIpReportPeriodic.Close()
 	}
+	c.flushTraffic()
 	err := c.server.DelNode(c.tag)
 	if err != nil {
 		return fmt.Errorf("del node error: %s", err)

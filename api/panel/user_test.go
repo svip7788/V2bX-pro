@@ -197,4 +197,28 @@ func TestReportCanFailAfterServerProcessedBody(t *testing.T) {
 	if requests != 1 {
 		t.Fatalf("expected server to process exactly 1 request, got %d", requests)
 	}
+	if IsNotDelivered(err) {
+		t.Fatalf("processed request must not be treated as undelivered: %v", err)
+	}
+}
+
+func TestIsNotDelivered(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	addr := server.URL
+	server.Close()
+
+	client, err := New(&conf.ApiConfig{APIHost: addr, NodeID: 1, Key: "test", NodeType: "vmess"})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	err = client.Report(context.Background(), []UserTraffic{{UID: 1, Upload: 10}}, nil)
+	if !IsNotDelivered(err) {
+		t.Fatalf("dial failure should be undelivered: %v", err)
+	}
+	if !IsNotDelivered(&StatusError{StatusCode: http.StatusBadGateway}) {
+		t.Fatal("502 should be undelivered")
+	}
+	if IsNotDelivered(&StatusError{StatusCode: http.StatusInternalServerError}) {
+		t.Fatal("500 may have been processed")
+	}
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/InazumaV/V2bX/api/panel"
 	"github.com/InazumaV/V2bX/common/counter"
@@ -124,7 +125,7 @@ func (b *Sing) AddUsers(p *core.AddUsersParams) (added int, err error) {
 	}
 	b.users.mapLock.Lock()
 	for i := range p.Users {
-		b.users.uidMap[p.Users[i].Uuid] = p.Users[i].Id
+		b.users.uidMap[format.UserTag(p.Tag, p.Users[i].Uuid)] = p.Users[i].Id
 	}
 	b.users.mapLock.Unlock()
 	return len(p.Users), nil
@@ -162,7 +163,7 @@ func (b *Sing) GetUserTrafficSlice(tag string, reset bool) ([]panel.UserTraffic,
 			if up == 0 && down == 0 {
 				return true
 			}
-			uid := b.users.uidMap[uuid]
+			uid := b.users.uidMap[format.UserTag(tag, uuid)]
 			if uid == 0 {
 				c.Delete(uuid)
 				return true
@@ -197,12 +198,7 @@ func (b *Sing) RestoreUserTraffic(tag string, trafficSlice []panel.UserTraffic) 
 		return nil
 	}
 	c := v.(*counter.TrafficCounter)
-	b.users.mapLock.RLock()
-	uidToUUID := make(map[int]string, len(b.users.uidMap))
-	for uuid, uid := range b.users.uidMap {
-		uidToUUID[uid] = uuid
-	}
-	b.users.mapLock.RUnlock()
+	uidToUUID := b.tagUIDToUUID(tag)
 	for i := range trafficSlice {
 		uuid, found := uidToUUID[trafficSlice[i].UID]
 		if !found {
@@ -224,12 +220,7 @@ func (b *Sing) CommitUserTraffic(tag string, trafficSlice []panel.UserTraffic) e
 		return nil
 	}
 	c := v.(*counter.TrafficCounter)
-	b.users.mapLock.RLock()
-	uidToUUID := make(map[int]string, len(b.users.uidMap))
-	for uuid, uid := range b.users.uidMap {
-		uidToUUID[uid] = uuid
-	}
-	b.users.mapLock.RUnlock()
+	uidToUUID := b.tagUIDToUUID(tag)
 	for i := range trafficSlice {
 		uuid, found := uidToUUID[trafficSlice[i].UID]
 		if !found {
@@ -240,6 +231,20 @@ func (b *Sing) CommitUserTraffic(tag string, trafficSlice []panel.UserTraffic) e
 		storage.DownCounter.Add(-trafficSlice[i].Download)
 	}
 	return nil
+}
+
+// tagUIDToUUID 取该节点的 uid → uuid；uidMap 按 tag|uuid 存，同一用户在多个节点上互不影响
+func (b *Sing) tagUIDToUUID(tag string) map[int]string {
+	prefix := tag + "|"
+	b.users.mapLock.RLock()
+	defer b.users.mapLock.RUnlock()
+	m := make(map[int]string)
+	for key, uid := range b.users.uidMap {
+		if uuid, ok := strings.CutPrefix(key, prefix); ok {
+			m[uid] = uuid
+		}
+	}
+	return m
 }
 
 func (b *Sing) CloseUserConns(tag string, uuid string) int {
@@ -297,7 +302,7 @@ func (b *Sing) DelUsers(users []panel.UserInfo, tag string, info *panel.NodeInfo
 		if tc != nil {
 			tc.Delete(users[i].Uuid)
 		}
-		delete(b.users.uidMap, users[i].Uuid)
+		delete(b.users.uidMap, format.UserTag(tag, users[i].Uuid))
 		connKeys = append(connKeys, format.UserTag(tag, users[i].Uuid))
 	}
 	b.users.mapLock.Unlock()

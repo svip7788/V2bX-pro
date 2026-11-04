@@ -9,6 +9,22 @@ import (
 	"github.com/InazumaV/V2bX/limiter"
 )
 
+func TestMergeTraffic(t *testing.T) {
+	out := mergeTraffic(
+		[]panel.UserTraffic{{UID: 1, Upload: 1, Download: 2}, {UID: 2, Upload: 5}},
+		[]panel.UserTraffic{{UID: 1, Upload: 10, Download: 20}, {UID: 3, Download: 7}},
+	)
+	want := map[int][2]int64{1: {11, 22}, 2: {5, 0}, 3: {0, 7}}
+	if len(out) != len(want) {
+		t.Fatalf("got %d entries, want %d", len(out), len(want))
+	}
+	for _, u := range out {
+		if w := want[u.UID]; u.Upload != w[0] || u.Download != w[1] {
+			t.Fatalf("uid %d: got %d/%d, want %d/%d", u.UID, u.Upload, u.Download, w[0], w[1])
+		}
+	}
+}
+
 func TestApplyDynamicSpeedLimitPanelOverridesLocal(t *testing.T) {
 	local := &conf.DynamicSpeedLimitConfig{DyLimitSpeed: 10}
 	c := &Controller{Options: &conf.Options{LimitConfig: conf.LimitConfig{
