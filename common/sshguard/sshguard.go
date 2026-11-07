@@ -3,8 +3,9 @@
 // 正常使用（登录自己的几台服务器、git over ssh）远低于阈值；
 // 爆破工具会在短时间内大量重连同一目标，扫描则会连大量不同目标。
 //
-// 分级处罚：首次命中只封 22 端口不上报；24 小时内再次命中或 10 分钟内
-// 连接超过 severeHostsLimit 个不同目标才上报面板封号。
+// 分级处罚：首次命中只封 22 端口不上报；24 小时内再次命中且涉及至少
+// reportMinHosts 个不同目标，或 10 分钟内连接超过 severeHosts 个不同目标才上报面板封号。
+// 只反复连同一两台机器（含断线自动重连的隧道脚本）只封端口不封号。
 package sshguard
 
 import (
@@ -15,17 +16,18 @@ import (
 )
 
 const (
-	burstWindow   = time.Minute
-	burstLimit    = 20 // 1 分钟内新建 22 连接数
-	targetWindow  = 10 * time.Minute
-	perHostLimit  = 30 // 10 分钟内连同一目标次数
-	hostsLimit    = 10 // 10 分钟内不同目标数
-	severeHosts   = 30 // 10 分钟内不同目标数超过即上报，封禁期间继续统计
-	firstBan      = time.Hour
-	repeatBan     = 24 * time.Hour
-	repeatWindow  = 24 * time.Hour
-	maxEntries    = 256
-	sweepInterval = 5 * time.Minute
+	burstWindow    = time.Minute
+	burstLimit     = 20 // 1 分钟内新建 22 连接数
+	targetWindow   = 10 * time.Minute
+	perHostLimit   = 30 // 10 分钟内连同一目标次数
+	hostsLimit     = 10 // 10 分钟内不同目标数
+	severeHosts    = 30 // 10 分钟内不同目标数超过即上报，封禁期间继续统计
+	reportMinHosts = 3  // 再次命中时窗口内不同目标数达到才上报
+	firstBan       = time.Hour
+	repeatBan      = 24 * time.Hour
+	repeatWindow   = 24 * time.Hour
+	maxEntries     = 256
+	sweepInterval  = 5 * time.Minute
 )
 
 // Port 受保护的目标端口
@@ -159,19 +161,20 @@ func check(key, host string, now time.Time) Result {
 		d = repeatBan
 		reason = "24 小时内再次触发：" + reason
 	}
+	report := repeat && hosts >= reportMinHosts
 	s.until = now.Add(d)
 	s.lastBan = now
-	s.reported = repeat
+	s.reported = report
 	s.hits = nil
 	s.banHosts = nil
-	if !repeat {
+	if !report {
 		s.banHosts = make(map[string]time.Time, severeHosts+1)
 		for _, h := range keep {
 			s.banHosts[h.host] = h.at
 		}
 		s.banHosts[host] = now
 	}
-	return Result{Reject: true, NewBan: true, Report: repeat, Until: s.until, Reason: reason}
+	return Result{Reject: true, NewBan: true, Report: report, Until: s.until, Reason: reason}
 }
 
 const severeReason = "10 分钟内扫描过多不同 SSH 目标"

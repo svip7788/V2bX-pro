@@ -82,8 +82,36 @@ func TestRepeatBanLonger(t *testing.T) {
 	if got := second.Until.Sub(first.Until.Add(time.Minute)); got < repeatBan-time.Minute {
 		t.Fatalf("repeat ban too short: %v", got)
 	}
-	if !second.NewBan || !second.Report {
-		t.Fatalf("repeat ban should report: %+v", second)
+	if !second.NewBan || second.Report {
+		t.Fatalf("single-target repeat ban should not report: %+v", second)
+	}
+}
+
+func TestRepeatMultiTargetReported(t *testing.T) {
+	now := time.Now()
+	ban := func(at time.Time) Result {
+		var r Result
+		for i := 0; i <= burstLimit; i++ {
+			r = check("multi", fmt.Sprintf("5.5.%d.1", i%reportMinHosts), at.Add(time.Duration(i)*time.Second))
+		}
+		return r
+	}
+	first := ban(now)
+	if !first.NewBan || first.Report {
+		t.Fatalf("first ban should not report: %+v", first)
+	}
+	if second := ban(first.Until.Add(time.Minute)); !second.NewBan || !second.Report {
+		t.Fatalf("multi-target repeat ban should report: %+v", second)
+	}
+}
+
+// 隧道脚本断线后每 3 秒重连同一台服务器，长时间运行也不能上报封号
+func TestReconnectLoopNeverReported(t *testing.T) {
+	now := time.Now()
+	for i := 0; i < 3*3600/3; i++ {
+		if r := check("tunnel", "76.13.181.87", now.Add(time.Duration(i)*3*time.Second)); r.Report {
+			t.Fatalf("reconnect loop reported at attempt %d: %+v", i, r)
+		}
 	}
 }
 
@@ -138,8 +166,8 @@ func TestBanNotExtendedAndRepeatAfterExpiry(t *testing.T) {
 	for i := 0; i <= burstLimit && !second.NewBan; i++ {
 		second = check("extend", "1.2.3.4", first.Until.Add(time.Duration(i+2)*time.Second))
 	}
-	if !second.NewBan || !second.Report || second.Until.Sub(first.Until) < repeatBan {
-		t.Fatalf("second offense should be 24h ban with report: %+v", second)
+	if !second.NewBan || second.Report || second.Until.Sub(first.Until) < repeatBan {
+		t.Fatalf("single-target second offense should be 24h ban without report: %+v", second)
 	}
 }
 
