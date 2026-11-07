@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/InazumaV/V2bX/api/panel"
+	"github.com/InazumaV/V2bX/common/ipwatch"
 	"github.com/InazumaV/V2bX/common/portreserve"
 	"github.com/InazumaV/V2bX/common/task"
 	"github.com/InazumaV/V2bX/common/violation"
@@ -29,6 +30,7 @@ type Controller struct {
 	trafficSince            time.Time
 	pendingTraffic          []panel.UserTraffic
 	localDynamic            *localDynamicConfig
+	dynamicGlobal           bool
 	userList                []panel.UserInfo
 	uidToUUID               map[int]string
 	aliveMap                map[int]int
@@ -95,6 +97,7 @@ func (c *Controller) Start() error {
 	}
 
 	c.applyDynamicSpeedLimit(node)
+	c.applyIPWatch(node)
 	// add limiter
 	l := limiter.AddLimiter(c.tag, &c.LimitConfig, c.userList, c.aliveMap)
 	// add rule limiter
@@ -221,6 +224,7 @@ func (c *Controller) Close() error {
 	}
 	limiter.DeleteLimiter(c.tag)
 	violation.Unregister(c.tag)
+	ipwatch.Set(c.tag, nil)
 	if c.nodeInfoMonitorPeriodic != nil {
 		c.nodeInfoMonitorPeriodic.Close()
 	}
@@ -352,6 +356,30 @@ func (c *Controller) processWSEvent(evt panel.WSEvent) {
 		}
 		c.limiter.SetAliveList(alive)
 		c.aliveMap = alive
+
+	case "speed.limit":
+		var data panel.WSSpeedLimitData
+		if err := json.Unmarshal(evt.Data, &data); err != nil {
+			log.WithField("err", err).Warn("WS: unmarshal speed.limit failed")
+			return
+		}
+		for _, u := range data.Users {
+			uuid, ok := c.uidToUUID[u.ID]
+			if !ok || u.LimitSpeed <= 0 || u.LimitTime <= 0 {
+				continue
+			}
+			closed, err := c.limitUserSpeed(uuid, u.LimitSpeed, u.LimitTime)
+			if err != nil {
+				log.WithFields(log.Fields{"tag": c.tag, "uid": u.ID, "err": err}).Warn("WS: apply speed.limit failed")
+				continue
+			}
+			log.WithFields(log.Fields{
+				"tag":    c.tag,
+				"uid":    u.ID,
+				"limit":  u.LimitSpeed,
+				"closed": closed,
+			}).Info("Global dynamic speed limit applied")
+		}
 	}
 }
 

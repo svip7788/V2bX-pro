@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/InazumaV/V2bX/api/panel"
+	"github.com/InazumaV/V2bX/common/ipwatch"
 	"github.com/InazumaV/V2bX/common/task"
 	"github.com/InazumaV/V2bX/common/violation"
 	"github.com/InazumaV/V2bX/conf"
@@ -118,6 +119,16 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 		}).Warn("Get alive list failed, keep old alive list")
 		newA = nil
 	}
+	// 只改了限速/监控策略：原地生效，不重建入站，避免断开所有用户
+	if newN != nil && !retrying && c.info != nil && newN.CoreHash != "" && newN.CoreHash == c.info.CoreHash {
+		c.info = newN
+		c.applyDynamicSpeedLimit(newN)
+		c.applyIPWatch(newN)
+		c.limiter.SetDynamicConfig(&c.LimitConfig)
+		c.resetDynamicTraffic()
+		log.WithField("tag", c.tag).Info("Node policy changed, applied without reload")
+		newN = nil
+	}
 	if newN != nil {
 		oldUsers := cloneUserList(c.userList)
 		nextUsers := c.userList
@@ -128,6 +139,7 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 		c.userList = nextUsers
 		c.rebuildUIDToUUID()
 		c.applyDynamicSpeedLimit(newN)
+		c.applyIPWatch(newN)
 		c.resetDynamicTraffic()
 		// Remove old node
 		log.WithField("tag", c.tag).Info("Node changed, reload")
@@ -260,6 +272,7 @@ func (c *Controller) applyDynamicSpeedLimit(n *panel.NodeInfo) {
 		}
 	}
 	enable, cfg := c.localDynamic.enable, c.localDynamic.cfg
+	c.dynamicGlobal = n.DynamicSpeedLimit != nil && n.DynamicSpeedLimit.Global
 	if d := n.DynamicSpeedLimit; d != nil {
 		enable = d.Enable
 		cfg = &conf.DynamicSpeedLimitConfig{
@@ -280,6 +293,23 @@ func (c *Controller) applyDynamicSpeedLimit(n *panel.NodeInfo) {
 	c.LimitConfig.DynamicSpeedLimitConfig = cfg
 }
 
+func (c *Controller) applyIPWatch(n *panel.NodeInfo) {
+	var m *ipwatch.Matcher
+	if w := n.IPWatch; w != nil && w.Enable {
+		m = ipwatch.New(w.Targets, w.Threshold)
+	}
+	ipwatch.Set(c.tag, m)
+}
+
+// limitUserSpeed 对用户施加动态限速；限速桶在建连时取定，断开现有连接让重连后立即按新限速走
+func (c *Controller) limitUserSpeed(uuid string, limitSpeed, limitTime int) (int, error) {
+	err := c.limiter.UpdateDynamicSpeedLimit(c.tag, uuid, limitSpeed, time.Now().Add(time.Duration(limitTime)*time.Second))
+	if err != nil {
+		return 0, err
+	}
+	return c.server.CloseUserConns(c.tag, uuid), nil
+}
+
 func (c *Controller) resetDynamicTraffic() {
 	c.traffic = make(map[string]int64)
 	c.trafficSince = time.Now()
@@ -291,7 +321,8 @@ func (c *Controller) checkDynamicSpeed() {
 	if !c.LimitConfig.EnableDynamicSpeedLimit || cfg == nil {
 		return
 	}
-	if !c.limiter.InDynamicLimitTimeRange() {
+	// 面板汇总模式下由面板判定并下发；WS 断开收不到下发时才按本节点流量兜底
+	if !c.limiter.InDynamicLimitTimeRange() || (c.dynamicGlobal && c.isWebSocketConnected()) {
 		c.resetDynamicTraffic()
 		return
 	}
@@ -339,14 +370,10 @@ func (c *Controller) checkDynamicSpeed() {
 		}
 		avgBytesPerSec := totalBytes / elapsed
 		if avgBytesPerSec >= triggerSpeedBytes {
-			err := c.limiter.UpdateDynamicSpeedLimit(c.tag, uuid,
-				limitSpeed,
-				time.Now().Add(time.Duration(limitTime)*time.Second))
+			closed, err := c.limitUserSpeed(uuid, limitSpeed, limitTime)
 			if err != nil {
 				log.WithField("err", err).Error("Update dynamic speed limit failed")
 			} else {
-				// 限速桶在建连时取定，断开现有连接让重连后立即按新限速走
-				closed := c.server.CloseUserConns(c.tag, uuid)
 				avgMbps := avgBytesPerSec * 8 / 1000000
 				violation.Report(c.tag, violation.Item{
 					UID:    uid,

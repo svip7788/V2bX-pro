@@ -70,6 +70,7 @@ func (h *HookServer) RoutedConnection(ctx context.Context, conn net.Conn, m adap
 		conn.Close()
 		return conn
 	}
+	watchIPQuery(l, m, destStr)
 	if m.Destination.Port == probe.Port {
 		var answered bool
 		if conn, answered = replyLatencyProbe(conn, m); answered {

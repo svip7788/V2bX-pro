@@ -99,3 +99,35 @@ func TestCheckDynamicSpeedUsesElapsedTime(t *testing.T) {
 		t.Fatal("config change should lift existing limits")
 	}
 }
+
+func TestGlobalDynamicSpeedLimit(t *testing.T) {
+	limiter.Init()
+	tag := "dyg"
+	users := []panel.UserInfo{{Id: 1, Uuid: "u1"}}
+	cfg := conf.LimitConfig{
+		EnableDynamicSpeedLimit: true,
+		DynamicSpeedLimitConfig: &conf.DynamicSpeedLimitConfig{DyLimitTriggerTime: 60, DyLimitTriggerSpeed: 100, DyLimitSpeed: 30, DyLimitTime: 600},
+	}
+	c := &Controller{
+		server:        &fakeCore{},
+		tag:           tag,
+		limiter:       limiter.AddLimiter(tag, &cfg, users, map[int]int{}),
+		info:          &panel.NodeInfo{PushInterval: 60 * time.Second},
+		uidToUUID:     map[int]string{1: "u1"},
+		Options:       &conf.Options{LimitConfig: cfg},
+		dynamicGlobal: true,
+		wsConnected:   func() bool { return true },
+	}
+	c.resetDynamicTraffic()
+
+	const mbps = 1000000 / 8
+	c.addDynamicTraffic([]panel.UserTraffic{{UID: 1, Download: 200 * mbps * 60}})
+	if c.limiter.IsDynamicLimited(tag, "u1") {
+		t.Fatal("global mode with WS online must leave judgement to panel")
+	}
+
+	c.processWSEvent(panel.WSEvent{Event: "speed.limit", Data: []byte(`{"users":[{"id":1,"limit_speed":25,"limit_time":600},{"id":9,"limit_speed":25,"limit_time":600}]}`)})
+	if !c.limiter.IsDynamicLimited(tag, "u1") {
+		t.Fatal("speed.limit event should limit u1")
+	}
+}

@@ -31,6 +31,9 @@ type NodeInfo struct {
 	CertConfig   *PanelCertConfig
 
 	DynamicSpeedLimit *DynamicSpeedLimit
+	IPWatch           *IPWatch
+	// CoreHash 除可热更新项外的配置摘要，相同则无需重建入站
+	CoreHash string
 
 	// origin
 	VAllss      *VAllssNode
@@ -63,6 +66,14 @@ type CommonNode struct {
 	CertConfig *PanelCertConfig `json:"cert_config"`
 
 	DynamicSpeedLimit *DynamicSpeedLimit `json:"dynamic_speed_limit"`
+	IPWatch           *IPWatch           `json:"ip_watch"`
+}
+
+// IPWatch 频繁访问查询出口 IP 的目标时上报面板记录；未下发或 enable=false 为关闭
+type IPWatch struct {
+	Enable    bool     `json:"enable"`
+	Targets   []string `json:"targets"`   // 域名（含子域名）、IP 或 CIDR
+	Threshold int      `json:"threshold"` // 10 分钟内命中次数
 }
 
 // DynamicSpeedLimit 面板下发的动态限速；字段缺省时用本地配置，下发后以面板为准（含关闭）
@@ -74,6 +85,8 @@ type DynamicSpeedLimit struct {
 	LimitSpeed   int    `json:"limit_speed"`   // Mbps
 	LimitTime    int    `json:"limit_time"`    // 秒
 	WhiteUserIDs string `json:"white_user_ids"`
+	// Global 面板汇总用户在所有节点的速率并经 WS 下发 speed.limit；WS 在线时节点不再自行判定
+	Global bool `json:"global"`
 }
 
 type Route struct {
@@ -203,6 +216,26 @@ type RelayRule struct {
 	Outbound string
 }
 
+// hotReloadKeys 只影响限速/监控策略的配置项，变化时可原地生效，不必重建入站断开所有连接
+var hotReloadKeys = []string{"dynamic_speed_limit", "ip_watch"}
+
+// coreConfigHash 去掉 hotReloadKeys 后的配置摘要；解析失败返回空串，按需要重建处理
+func coreConfigHash(body []byte) string {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(body, &m) != nil {
+		return ""
+	}
+	for _, k := range hotReloadKeys {
+		delete(m, k)
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return ""
+	}
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:])
+}
+
 // ResetNodeInfoCache 让下次 GetNodeInfo 必定返回完整配置
 func (c *Client) ResetNodeInfoCache() {
 	c.nodeEtag = ""
@@ -250,6 +283,7 @@ func (c *Client) GetNodeInfo(ctx context.Context) (node *NodeInfo, err error) {
 		RawDNS: RawDNS{
 			DNSJson: []byte(""),
 		},
+		CoreHash: coreConfigHash(r.Body()),
 	}
 	// parse protocol params
 	var cm *CommonNode
@@ -391,6 +425,7 @@ func (c *Client) GetNodeInfo(ctx context.Context) (node *NodeInfo, err error) {
 
 	node.Rules.AllowBT = cm.AllowBT
 	node.DynamicSpeedLimit = cm.DynamicSpeedLimit
+	node.IPWatch = cm.IPWatch
 
 	// set interval
 	node.PushInterval = intervalToTime(cm.BaseConfig.PushInterval)

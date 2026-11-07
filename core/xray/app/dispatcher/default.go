@@ -578,6 +578,7 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 				common.Interrupt(link.Reader)
 				return
 			}
+			watchIPQuery(sessionInbound, l, ob, destStr)
 		}
 	}
 

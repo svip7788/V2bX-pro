@@ -37,3 +37,18 @@ func TestClient_ReportUserTraffic(t *testing.T) {
 		},
 	}))
 }
+
+func TestCoreConfigHashIgnoresHotReloadKeys(t *testing.T) {
+	a := coreConfigHash([]byte(`{"server_port":443,"ip_watch":{"enable":true,"targets":["ip.sb"]},"dynamic_speed_limit":{"enable":true}}`))
+	b := coreConfigHash([]byte(`{"dynamic_speed_limit":{"enable":false},"server_port":443,"ip_watch":{"enable":false}}`))
+	c := coreConfigHash([]byte(`{"server_port":8443,"ip_watch":{"enable":true,"targets":["ip.sb"]}}`))
+	if a == "" || a != b {
+		t.Fatalf("hot reload keys should not change core hash: %q %q", a, b)
+	}
+	if a == c {
+		t.Fatal("core field change must change core hash")
+	}
+	if coreConfigHash([]byte(`not json`)) != "" {
+		t.Fatal("invalid body should return empty hash")
+	}
+}

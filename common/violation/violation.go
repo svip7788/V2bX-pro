@@ -1,5 +1,5 @@
-// Package violation 收集节点检测到的用户违规（BT、SSH 爆破）及动态限速记录并批量上报面板；
-// 封号与否由面板按类型决定（speed 只记录）
+// Package violation 收集节点检测到的用户违规（BT、SSH 爆破）及动态限速、频繁查询 IP 记录并批量上报面板；
+// 封号与否由面板按类型决定（speed、ipquery 只记录）
 package violation
 
 import (
@@ -14,6 +14,8 @@ const (
 	KindBT    = "bt"
 	KindSSH   = "ssh"
 	KindSpeed = "speed"
+	// KindIPQuery 频繁访问查询出口 IP 的目标
+	KindIPQuery = "ipquery"
 
 	flushInterval = 3 * time.Second
 	dedupeTTL     = 10 * time.Minute

@@ -42,6 +42,15 @@ type WSUserDeltaData struct {
 	Users  []UserInfo `json:"users"`
 }
 
+// WSSpeedLimitData 面板汇总判定后下发的动态限速
+type WSSpeedLimitData struct {
+	Users []struct {
+		ID         int `json:"id"`
+		LimitSpeed int `json:"limit_speed"` // Mbps
+		LimitTime  int `json:"limit_time"`  // 秒
+	} `json:"users"`
+}
+
 type WSDevicesData struct {
 	Users map[string][]string `json:"users"`
 }
