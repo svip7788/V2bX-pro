@@ -15,7 +15,7 @@ func (c *Controller) reportUserTrafficTask() (err error) {
 	defer c.limiter.MarkOnlineDeviceReported()
 
 	ctx := c.currentCtx()
-	if ctx.Err() != nil {
+	if ctx.Err() != nil || time.Now().Before(c.goneUntil) {
 		return nil
 	}
 

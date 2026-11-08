@@ -61,10 +61,31 @@ func (c *Controller) shouldPoll(now time.Time) bool {
 }
 
 func (c *Controller) periodicNodeInfoMonitor() error {
-	if !c.shouldPoll(time.Now()) {
+	if !c.shouldPoll(time.Now()) || c.isGone() {
 		return nil
 	}
 	return c.nodeInfoMonitor()
+}
+
+const (
+	goneBackoffMin = 5 * time.Minute
+	goneBackoffMax = 30 * time.Minute
+)
+
+func (c *Controller) isGone() bool {
+	c.runtimeMu.Lock()
+	defer c.runtimeMu.Unlock()
+	return time.Now().Before(c.goneUntil)
+}
+
+// markGone 需持有 runtimeMu
+func (c *Controller) markGone() {
+	c.goneBackoff = min(max(c.goneBackoff*2, goneBackoffMin), goneBackoffMax)
+	c.goneUntil = time.Now().Add(c.goneBackoff)
+	log.WithFields(log.Fields{
+		"tag":   c.tag,
+		"retry": c.goneBackoff,
+	}).Error("Node does not exist on panel, remove it from config")
 }
 
 func (c *Controller) nodeInfoMonitor() (err error) {
@@ -87,12 +108,18 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 		if ctx.Err() != nil {
 			return nil
 		}
+		if panel.IsNodeNotExist(err) {
+			c.markGone()
+			return nil
+		}
 		log.WithFields(log.Fields{
 			"tag": c.tag,
 			"err": err,
 		}).Error("Get node info failed")
 		return nil
 	}
+	c.goneBackoff = 0
+	c.goneUntil = time.Time{}
 	// get user info
 	newU, err := c.apiClient.GetUserList(ctx)
 	if err != nil {

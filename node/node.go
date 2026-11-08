@@ -25,8 +25,18 @@ func (n *Node) Start(nodes []conf.NodeConfig, core vCore.Core) error {
 			n.Close()
 			return err
 		}
-		n.controllers[i] = NewController(core, p, &nodes[i].Options)
-		err = n.controllers[i].Start()
+		c := NewController(core, p, &nodes[i].Options)
+		err = c.Start()
+		// 配置里残留已删除的节点时不能拖垮同进程的其它节点
+		if err != nil && panel.IsNodeNotExist(err) && len(nodes) > 1 {
+			c.cancel()
+			log.WithFields(log.Fields{
+				"node_type": nodes[i].ApiConfig.NodeType,
+				"node_id":   nodes[i].ApiConfig.NodeID,
+			}).Error("Node does not exist on panel, skipped; remove it from config")
+			continue
+		}
+		n.controllers[i] = c
 		if err != nil {
 			n.Close()
 			return fmt.Errorf("start node controller [%s-%s-%d] error: %s",

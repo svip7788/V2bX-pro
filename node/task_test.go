@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -72,6 +73,35 @@ func TestNodeInfoRefetchedAfterUserListFailure(t *testing.T) {
 	}
 	if n == nil || n.IPWatch == nil || n.IPWatch.Threshold != 1 {
 		t.Fatal("config fetched before a failed user list must be refetched, not swallowed by 304")
+	}
+}
+
+func TestNodeInfoMonitorBacksOffWhenNodeGone(t *testing.T) {
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"status":"fail","message":"Server does not exist"}`))
+	}))
+	defer server.Close()
+
+	c := newTestController(t, server.URL, &fakeCore{})
+	for i := 0; i < 3; i++ {
+		if err := c.periodicNodeInfoMonitor(); err != nil {
+			t.Fatalf("periodicNodeInfoMonitor: %v", err)
+		}
+	}
+	if got := hits.Load(); got != 1 {
+		t.Fatalf("deleted node should back off after first 400, got %d requests", got)
+	}
+	if c.goneBackoff != goneBackoffMin {
+		t.Fatalf("backoff = %v, want %v", c.goneBackoff, goneBackoffMin)
+	}
+	for i := 0; i < 5; i++ {
+		c.markGone()
+	}
+	if c.goneBackoff != goneBackoffMax {
+		t.Fatalf("backoff should cap at %v, got %v", goneBackoffMax, c.goneBackoff)
 	}
 }
 

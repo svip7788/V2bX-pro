@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	path2 "path"
+	"strings"
 
 	"github.com/go-resty/resty/v2"
 )
@@ -38,6 +39,12 @@ func (c *Client) checkResponse(res *resty.Response, path string, err error) erro
 		return &StatusError{URL: c.assembleURL(path), StatusCode: res.StatusCode(), Body: string(res.Body())}
 	}
 	return nil
+}
+
+// IsNodeNotExist 面板上该节点已被删除
+func IsNodeNotExist(err error) bool {
+	var se *StatusError
+	return errors.As(err, &se) && se.StatusCode == http.StatusBadRequest && strings.Contains(se.Body, "Server does not exist")
 }
 
 // IsNotDelivered 请求确定没被面板处理（连不上 / DNS 失败 / 网关报上游不可用），可以安全重试而不会重复计费。

@@ -50,9 +50,12 @@ type Controller struct {
 	// 重载时已删掉旧入站但未成功加回，需按拉取间隔重试，不能依赖配置是否变化
 	reloadFailed atomic.Bool
 	lastPollAt   atomic.Int64
-	runtimeMu    sync.Mutex
-	ctx          context.Context
-	cancel       context.CancelFunc
+	// 面板已删除该节点时的退避，runtimeMu 保护
+	goneUntil   time.Time
+	goneBackoff time.Duration
+	runtimeMu   sync.Mutex
+	ctx         context.Context
+	cancel      context.CancelFunc
 	*conf.Options
 }
 
@@ -76,7 +79,7 @@ func (c *Controller) Start() error {
 	ctx := c.currentCtx()
 	node, err := c.apiClient.GetNodeInfo(ctx)
 	if err != nil {
-		return fmt.Errorf("get node info error: %s", err)
+		return fmt.Errorf("get node info error: %w", err)
 	}
 	reservePort(node)
 	// Update user
