@@ -19,6 +19,7 @@ func New() *Node {
 
 func (n *Node) Start(nodes []conf.NodeConfig, core vCore.Core) error {
 	n.controllers = make([]*Controller, len(nodes))
+	skipped := 0
 	for i := range nodes {
 		p, err := panel.New(&nodes[i].ApiConfig)
 		if err != nil {
@@ -28,8 +29,9 @@ func (n *Node) Start(nodes []conf.NodeConfig, core vCore.Core) error {
 		c := NewController(core, p, &nodes[i].Options)
 		err = c.Start()
 		// 配置里残留已删除的节点时不能拖垮同进程的其它节点
-		if err != nil && panel.IsNodeNotExist(err) && len(nodes) > 1 {
+		if err != nil && panel.IsNodeNotExist(err) {
 			c.cancel()
+			skipped++
 			log.WithFields(log.Fields{
 				"node_type": nodes[i].ApiConfig.NodeType,
 				"node_id":   nodes[i].ApiConfig.NodeID,
@@ -45,6 +47,10 @@ func (n *Node) Start(nodes []conf.NodeConfig, core vCore.Core) error {
 				nodes[i].ApiConfig.NodeID,
 				err)
 		}
+	}
+	if skipped > 0 && skipped == len(nodes) {
+		n.Close()
+		return fmt.Errorf("all %d nodes do not exist on panel", skipped)
 	}
 	return nil
 }
