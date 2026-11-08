@@ -44,6 +44,7 @@ func init() {
 
 func serverHandle(_ *cobra.Command, _ []string) {
 	panel.UserAgent = "V2bX/" + version
+	watchPprofSignal()
 	if childGroupIndex == 0 {
 		showVersion()
 		applyMemoryLimit()
