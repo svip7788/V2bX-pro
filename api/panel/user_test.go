@@ -85,6 +85,80 @@ func TestGetUserListForcesPeriodicFullRefresh(t *testing.T) {
 	}
 }
 
+func TestGetUserListDeltaSync(t *testing.T) {
+	steps := []struct {
+		wantVer string
+		status  int
+		body    string
+	}{
+		{"0", 200, `{"ver":"g.1","users":[{"id":1,"uuid":"u1"},{"id":2,"uuid":"u2"},{"id":3,"uuid":"u3"}]}`},
+		{"g.1", 304, ``},
+		{"g.1", 200, `{"ver":"g.2","delta":true,"total":3,"add":[{"id":2,"uuid":"u2","speed_limit":9},{"id":4,"uuid":"u4"}],"remove":[3]}`},
+		{"g.2", 200, `{"ver":"g.3","delta":true,"total":9,"add":[],"remove":[1]}`},
+		{"0", 200, `{"ver":"g.3","users":[{"id":2,"uuid":"u2"}]}`},
+	}
+	step := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if step >= len(steps) {
+			t.Fatalf("unexpected request %d", step+1)
+		}
+		s := steps[step]
+		step++
+		if got, ok := r.URL.Query()["ver"]; !ok || got[0] != s.wantVer {
+			t.Fatalf("request %d: ver = %v, want %q", step, got, s.wantVer)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(s.status)
+		_, _ = w.Write([]byte(s.body))
+	}))
+	defer server.Close()
+
+	client, err := New(&conf.ApiConfig{APIHost: server.URL, NodeID: 1, Key: "test", NodeType: "vmess"})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	ctx := context.Background()
+
+	users, err := client.GetUserList(ctx)
+	if err != nil || len(users) != 3 {
+		t.Fatalf("full: %v %#v", err, users)
+	}
+	if users, err = client.GetUserList(ctx); err != nil || users != nil {
+		t.Fatalf("unchanged should return nil: %v %#v", err, users)
+	}
+	users, err = client.GetUserList(ctx)
+	if err != nil {
+		t.Fatalf("delta: %v", err)
+	}
+	got := map[int]int{}
+	for _, u := range users {
+		got[u.Id] = u.SpeedLimit
+	}
+	if len(got) != 3 || got[2] != 9 || got[4] != 0 {
+		t.Fatalf("delta merged wrong: %#v", users)
+	}
+	if _, ok := got[3]; ok {
+		t.Fatal("removed user still present")
+	}
+	if _, err = client.GetUserList(ctx); err == nil {
+		t.Fatal("total mismatch must error")
+	}
+	if users, err = client.GetUserList(ctx); err != nil || len(users) != 1 {
+		t.Fatalf("after mismatch must refetch full: %v %#v", err, users)
+	}
+}
+
+func TestApplyUserDeltaKeepsBase(t *testing.T) {
+	base := []UserInfo{{Id: 1, Uuid: "a"}, {Id: 2, Uuid: "b"}}
+	out := applyUserDelta(base, []UserInfo{{Id: 1, Uuid: "a", SpeedLimit: 5}}, []int{2})
+	if len(out) != 1 || out[0].SpeedLimit != 5 {
+		t.Fatalf("unexpected result: %#v", out)
+	}
+	if base[0].SpeedLimit != 0 || len(base) != 2 {
+		t.Fatal("base must not be modified")
+	}
+}
+
 func TestNewDisablesAutoRetry(t *testing.T) {
 	client, err := New(&conf.ApiConfig{
 		APIHost:  "http://127.0.0.1",

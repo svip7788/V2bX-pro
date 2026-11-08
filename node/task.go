@@ -1,8 +1,6 @@
 package node
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -86,7 +84,7 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 	// get node info
 	newN, err := c.apiClient.GetNodeInfo(ctx)
 	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		if ctx.Err() != nil {
 			return nil
 		}
 		log.WithFields(log.Fields{
@@ -98,7 +96,11 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 	// get user info
 	newU, err := c.apiClient.GetUserList(ctx)
 	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		// 节点配置已按 ETag 记为已取，不重置的话本次变更会被下次 304 吞掉
+		if newN != nil {
+			c.apiClient.ResetNodeInfoCache()
+		}
+		if ctx.Err() != nil {
 			return nil
 		}
 		log.WithFields(log.Fields{
@@ -107,10 +109,16 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 		}).Error("Get user list failed")
 		return nil
 	}
+	if newU != nil {
+		newU = c.keepRecentWSChanges(newU, c.apiClient.UserListAt())
+	}
 	// get user alive
 	newA, err := c.apiClient.GetUserAlive(ctx)
 	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		if ctx.Err() != nil {
+			if newN != nil {
+				c.apiClient.ResetNodeInfoCache()
+			}
 			return nil
 		}
 		log.WithFields(log.Fields{

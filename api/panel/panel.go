@@ -25,6 +25,8 @@ type Client struct {
 	NodeId                    int
 	nodeEtag                  string
 	userEtag                  string
+	userVer                   string // 面板增量同步的版本，空表示面板不支持或需要全量
+	userListAt                time.Time
 	responseBodyHash          string
 	UserList                  *UserListBody
 	AliveMap                  *AliveMap
@@ -35,7 +37,11 @@ type Client struct {
 	MachineID int
 }
 
-const defaultUserListForceRefreshAfter = 5 * time.Minute
+const (
+	defaultUserListForceRefreshAfter = 5 * time.Minute
+	// 增量同步下差异可校验人数，长时间才兜底拉一次全量
+	deltaUserListForceRefreshAfter = 6 * time.Hour
+)
 
 // NewMachineNode 创建机器模式下单个节点的客户端，c.Key 为机器 token
 func NewMachineNode(c *conf.ApiConfig, machineID int) (*Client, error) {
@@ -139,6 +145,9 @@ func (c *Client) now() time.Time {
 func (c *Client) userListRefreshInterval() time.Duration {
 	if c.userListForceRefreshAfter > 0 {
 		return c.userListForceRefreshAfter
+	}
+	if c.userVer != "" {
+		return deltaUserListForceRefreshAfter
 	}
 	return defaultUserListForceRefreshAfter
 }

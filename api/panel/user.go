@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -29,6 +31,17 @@ type UserListBody struct {
 	Users []UserInfo `json:"users" msgpack:"users"`
 }
 
+// userListResp 面板增量同步的响应：全量带 users；差异带 delta、add、remove，total 为合并后应有的人数
+type userListResp struct {
+	Ver    string
+	Age    int // 快照距今秒数
+	Delta  bool
+	Total  int
+	Users  []UserInfo
+	Add    []UserInfo
+	Remove []int
+}
+
 type AliveMap struct {
 	Alive map[int]int `json:"alive"`
 }
@@ -40,10 +53,22 @@ func (c *Client) GetUserList(ctx context.Context) ([]UserInfo, error) {
 		SetContext(ctx).
 		SetHeader("X-Response-Format", "msgpack").
 		SetDoNotParseResponse(true)
-	if c.userEtag != "" && !c.lastUserListFullFetchAt.IsZero() &&
-		c.now().Sub(c.lastUserListFullFetchAt) < c.userListRefreshInterval() {
+	fresh := c.UserList != nil && !c.lastUserListFullFetchAt.IsZero() &&
+		c.now().Sub(c.lastUserListFullFetchAt) < c.userListRefreshInterval()
+	// 带 ver 即声明支持增量同步，0 表示要全量；老面板不认识会忽略，照旧按 ETag 返回全量
+	ver := ""
+	if fresh {
+		ver = c.userVer
+	}
+	if ver == "" {
+		req.SetQueryParam("ver", "0")
+	} else {
+		req.SetQueryParam("ver", ver)
+	}
+	if fresh && c.userEtag != "" {
 		req.SetHeader("If-None-Match", c.userEtag)
 	}
+	sentAt := c.now()
 	r, err := req.Get(path)
 	if r == nil || r.RawResponse == nil {
 		return nil, fmt.Errorf("received nil response or raw response")
@@ -57,46 +82,141 @@ func (c *Client) GetUserList(ctx context.Context) ([]UserInfo, error) {
 	if err = c.checkResponse(r, path, err); err != nil {
 		return nil, err
 	}
-	userlist := &UserListBody{Users: []UserInfo{}}
+	resp := &userListResp{}
 	if strings.Contains(r.Header().Get("Content-Type"), "application/x-msgpack") {
-		decoder := msgpack.NewDecoder(r.RawResponse.Body)
-		if err := decoder.Decode(userlist); err != nil {
+		userlist := &UserListBody{Users: []UserInfo{}}
+		if err := msgpack.NewDecoder(r.RawResponse.Body).Decode(userlist); err != nil {
 			return nil, fmt.Errorf("decode user list error: %w", err)
 		}
-	} else {
-		dec := jsontext.NewDecoder(r.RawResponse.Body)
-		for {
-			tok, err := dec.ReadToken()
-			if err != nil {
-				return nil, fmt.Errorf("decode user list error: %w", err)
-			}
-			if tok.Kind() == '"' && tok.String() == "users" {
-				break
-			}
-		}
-		tok, err := dec.ReadToken()
-		if err != nil {
-			return nil, fmt.Errorf("decode user list error: %w", err)
-		}
-		if tok.Kind() != '[' {
-			return nil, fmt.Errorf(`decode user list error: expected "users" array`)
-		}
-		for dec.PeekKind() != ']' {
-			val, err := dec.ReadValue()
-			if err != nil {
-				return nil, fmt.Errorf("decode user list error: read user object: %w", err)
-			}
-			var u UserInfo
-			if err := json.Unmarshal(val, &u); err != nil {
-				return nil, fmt.Errorf("decode user list error: unmarshal user error: %w", err)
-			}
-			userlist.Users = append(userlist.Users, u)
-		}
+		resp.Users = userlist.Users
+	} else if err := decodeUserListJSON(r.RawResponse.Body, resp); err != nil {
+		return nil, fmt.Errorf("decode user list error: %w", err)
 	}
+	snapshotAt := sentAt.Add(-time.Duration(resp.Age) * time.Second)
+
+	if resp.Delta {
+		if ver == "" {
+			return nil, fmt.Errorf("decode user list error: unexpected delta without base version")
+		}
+		users := applyUserDelta(c.UserList.Users, resp.Add, resp.Remove)
+		if len(users) != resp.Total {
+			// 本地快照与面板对不上，下次取全量重新对齐
+			c.userVer = ""
+			return nil, fmt.Errorf("user list delta mismatch: have %d users, panel has %d", len(users), resp.Total)
+		}
+		c.userVer = resp.Ver
+		c.userListAt = snapshotAt
+		c.UserList = &UserListBody{Users: users}
+		return users, nil
+	}
+	if resp.Users == nil {
+		resp.Users = []UserInfo{}
+	}
+	c.userVer = resp.Ver
+	c.userListAt = snapshotAt
 	c.userEtag = r.Header().Get("ETag")
 	c.lastUserListFullFetchAt = c.now()
-	c.UserList = userlist
-	return userlist.Users, nil
+	c.UserList = &UserListBody{Users: resp.Users}
+	return resp.Users, nil
+}
+
+// UserListAt 最近一次取到的用户列表对应的时刻（按本地时钟折算）
+func (c *Client) UserListAt() time.Time {
+	return c.userListAt
+}
+
+// decodeUserListJSON 流式解析，用户列表可能有数十万条，避免整体反序列化的峰值内存
+func decodeUserListJSON(body io.Reader, resp *userListResp) error {
+	dec := jsontext.NewDecoder(body)
+	if tok, err := dec.ReadToken(); err != nil {
+		return err
+	} else if tok.Kind() != '{' {
+		return fmt.Errorf("expected object")
+	}
+	for dec.PeekKind() != '}' {
+		tok, err := dec.ReadToken()
+		if err != nil {
+			return err
+		}
+		switch key := tok.String(); key {
+		case "users", "add":
+			list, err := decodeUserArray(dec)
+			if err != nil {
+				return fmt.Errorf("read %s: %w", key, err)
+			}
+			if key == "users" {
+				resp.Users = list
+			} else {
+				resp.Add = list
+			}
+		case "remove", "ver", "age", "delta", "total":
+			val, err := dec.ReadValue()
+			if err != nil {
+				return err
+			}
+			var dst any
+			switch key {
+			case "remove":
+				dst = &resp.Remove
+			case "ver":
+				dst = &resp.Ver
+			case "age":
+				dst = &resp.Age
+			case "delta":
+				dst = &resp.Delta
+			default:
+				dst = &resp.Total
+			}
+			if err := json.Unmarshal(val, dst); err != nil {
+				return fmt.Errorf("read %s: %w", key, err)
+			}
+		default:
+			if err := dec.SkipValue(); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func decodeUserArray(dec *jsontext.Decoder) ([]UserInfo, error) {
+	if tok, err := dec.ReadToken(); err != nil {
+		return nil, err
+	} else if tok.Kind() != '[' {
+		return nil, fmt.Errorf("expected array")
+	}
+	users := []UserInfo{}
+	for dec.PeekKind() != ']' {
+		val, err := dec.ReadValue()
+		if err != nil {
+			return nil, err
+		}
+		var u UserInfo
+		if err := json.Unmarshal(val, &u); err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	_, err := dec.ReadToken()
+	return users, err
+}
+
+// applyUserDelta 返回新切片，不改动 base（base 可能仍被调用方持有）
+func applyUserDelta(base, add []UserInfo, remove []int) []UserInfo {
+	drop := make(map[int]struct{}, len(remove)+len(add))
+	for _, id := range remove {
+		drop[id] = struct{}{}
+	}
+	for _, u := range add {
+		drop[u.Id] = struct{}{}
+	}
+	out := make([]UserInfo, 0, len(base)+len(add))
+	for _, u := range base {
+		if _, ok := drop[u.Id]; !ok {
+			out = append(out, u)
+		}
+	}
+	return append(out, add...)
 }
 
 // GetUserAlive will fetch the alive_ip count for users

@@ -33,6 +33,7 @@ type Controller struct {
 	dynamicGlobal           bool
 	userList                []panel.UserInfo
 	uidToUUID               map[int]string
+	wsTouched               map[int]time.Time // 用户最近一次 WS 增量的到达时间
 	aliveMap                map[int]int
 	info                    *panel.NodeInfo
 	nodeInfoMonitorPeriodic *task.Task
@@ -409,6 +410,15 @@ func (c *Controller) applyFullUsers(newUsers []panel.UserInfo) {
 }
 
 func (c *Controller) applyUserDelta(action string, users []panel.UserInfo) {
+	if c.wsTouched == nil {
+		c.wsTouched = make(map[int]time.Time)
+	}
+	now := time.Now()
+	for _, u := range users {
+		if u.Id > 0 {
+			c.wsTouched[u.Id] = now
+		}
+	}
 	switch action {
 	case "add":
 		if len(users) == 0 {
@@ -478,6 +488,41 @@ func (c *Controller) applyUserDelta(action string, users []panel.UserInfo) {
 		c.rebuildUIDToUUID()
 		log.WithField("tag", c.tag).Infof("WS: delta removed %d users", len(matched))
 	}
+}
+
+// wsGrace 折算快照时刻的误差余量（请求往返、推送延迟），宁可多保留一轮
+const wsGrace = 5 * time.Second
+
+// keepRecentWSChanges 轮询取到的快照可能早于刚收到的 WS 增量，这些用户沿用本地状态，留给下一轮核对。
+// 不修改 next（可能是 API 客户端持有的快照）
+func (c *Controller) keepRecentWSChanges(next []panel.UserInfo, snapshotAt time.Time) []panel.UserInfo {
+	if len(c.wsTouched) == 0 || snapshotAt.IsZero() {
+		return next
+	}
+	cutoff := snapshotAt.Add(-wsGrace)
+	recent := make(map[int]struct{})
+	for id, t := range c.wsTouched {
+		if t.After(cutoff) {
+			recent[id] = struct{}{}
+		} else {
+			delete(c.wsTouched, id)
+		}
+	}
+	if len(recent) == 0 {
+		return next
+	}
+	out := make([]panel.UserInfo, 0, len(next))
+	for _, u := range next {
+		if _, ok := recent[u.Id]; !ok {
+			out = append(out, u)
+		}
+	}
+	for _, u := range c.userList {
+		if _, ok := recent[u.Id]; ok {
+			out = append(out, u)
+		}
+	}
+	return out
 }
 
 func cloneUserList(users []panel.UserInfo) []panel.UserInfo {
