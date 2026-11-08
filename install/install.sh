@@ -231,7 +231,19 @@ install_V2bX() {
     fi
     url="https://github.com/${repo}/releases/download/${last_version}/V2bX-linux-${arch}.zip"
     downloaded=false
+    # 面板会缓存安装包，节点到面板通常比到 GitHub 快
+    if [[ -n "$panel_url" ]]; then
+        panel_zip="${panel_url%/}/downloads/v2bx/${last_version}/V2bX-linux-${arch}.zip"
+        expected=$(curl -fsSL --max-time 15 "${panel_zip}.sha256" 2>/dev/null)
+        if [[ "$expected" =~ ^[0-9a-f]{64}$ ]] \
+            && wget --no-check-certificate -q --timeout=30 --tries=2 -O /usr/local/V2bX/V2bX-linux.zip "$panel_zip" \
+            && echo "${expected}  /usr/local/V2bX/V2bX-linux.zip" | sha256sum -c - >/dev/null 2>&1; then
+            downloaded=true
+            echo -e "已从面板下载 V2bX ${last_version}"
+        fi
+    fi
     for mirror in "" "https://ghfast.top/" "https://gh-proxy.com/"; do
+        [[ $downloaded == true ]] && break
         if wget --no-check-certificate -q --timeout=30 --tries=2 -O /usr/local/V2bX/V2bX-linux.zip "${mirror}${url}" \
             && [[ -s /usr/local/V2bX/V2bX-linux.zip ]]; then
             downloaded=true

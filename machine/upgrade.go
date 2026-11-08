@@ -2,6 +2,7 @@ package machine
 
 import (
 	"archive/zip"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -15,7 +16,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -60,6 +63,9 @@ func (r *commandRunner) upgrade(cmd command) (bool, string, error) {
 	var p struct {
 		Version string `json:"version"`
 		Repo    string `json:"repo"`
+		// 面板缓存的安装包目录（以 / 结尾）及各包 SHA256，节点到面板通常比到 GitHub 快得多
+		Mirror string            `json:"mirror"`
+		SHA256 map[string]string `json:"sha256"`
 	}
 	_ = json.Unmarshal(cmd.Params, &p)
 	p.Version = strings.TrimSpace(p.Version)
@@ -93,7 +99,10 @@ func (r *commandRunner) upgrade(cmd command) (bool, string, error) {
 	asset := fmt.Sprintf("V2bX-linux-%s.zip", arch)
 	path := fmt.Sprintf("%s/releases/download/%s/%s", p.Repo, p.Version, asset)
 	zipFile := filepath.Join(stage, "V2bX.zip")
-	expected := fetchSHA256(r.m.ctx, p.Repo, p.Version, asset)
+	expected := strings.ToLower(p.SHA256[asset])
+	if !sha256Hex.MatchString(expected) {
+		expected = fetchSHA256(r.m.ctx, p.Repo, p.Version, asset)
+	}
 	if expected == "" {
 		logf("未能从 GitHub 获取 SHA256，仅校验压缩包完整性（无法防止镜像篡改）")
 	}
@@ -117,9 +126,15 @@ func (r *commandRunner) upgrade(cmd command) (bool, string, error) {
 		}
 		return true
 	}
-	for _, mirror := range githubMirrors {
-		if downloaded = try(mirror+path, downloadOptions{maxTime: 10 * time.Minute, minSpeed: 100 << 10}); downloaded {
-			break
+	if strings.HasPrefix(p.Mirror, "https://") || strings.HasPrefix(p.Mirror, "http://") {
+		downloaded = try(p.Mirror+asset, downloadOptions{maxTime: 10 * time.Minute, minSpeed: 50 << 10})
+	}
+	if !downloaded {
+		logf("测速 GitHub 下载源")
+		for _, mirror := range rankMirrors(r.m.ctx, githubMirrors, path) {
+			if downloaded = try(mirror+path, downloadOptions{maxTime: 10 * time.Minute, minSpeed: 100 << 10}); downloaded {
+				break
+			}
 		}
 	}
 	if !downloaded {
@@ -279,6 +294,60 @@ func download(ctx context.Context, url, dest string, opt downloadOptions) error 
 		err = fmt.Errorf("文件为空")
 	}
 	return err
+}
+
+const (
+	probeBytes   = 1 << 20
+	probeTimeout = 8 * time.Second
+)
+
+// rankMirrors 并发拉取各源开头一段测速，按速度从快到慢排序；测速失败的排在最后、保持原顺序
+func rankMirrors(ctx context.Context, mirrors []string, path string) []string {
+	speeds := make([]float64, len(mirrors))
+	var wg sync.WaitGroup
+	for i, m := range mirrors {
+		wg.Add(1)
+		go func(i int, url string) {
+			defer wg.Done()
+			speeds[i] = probeSpeed(ctx, url)
+		}(i, m+path)
+	}
+	wg.Wait()
+	ranked := slices.Clone(mirrors)
+	idx := make(map[string]int, len(mirrors))
+	for i, m := range mirrors {
+		idx[m] = i
+	}
+	slices.SortStableFunc(ranked, func(a, b string) int {
+		return cmp.Compare(speeds[idx[b]], speeds[idx[a]])
+	})
+	return ranked
+}
+
+// probeSpeed 返回 B/s，失败返回 0
+func probeSpeed(ctx context.Context, url string) float64 {
+	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return 0
+	}
+	req.Header.Set("Range", fmt.Sprintf("bytes=0-%d", probeBytes-1))
+	start := time.Now()
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+		return 0
+	}
+	// 超时前读到的部分也计入，慢源不至于全部记为 0
+	n, _ := io.CopyN(io.Discard, resp.Body, probeBytes)
+	if n < 64<<10 {
+		return 0
+	}
+	return float64(n) / time.Since(start).Seconds()
 }
 
 // fetchSHA256 只从 GitHub 获取校验值：镜像可同时篡改压缩包和 .dgst，其返回的校验值不可信。失败返回空串
