@@ -23,6 +23,11 @@ func (s *session) writePacketWithPadding(packetIndex uint32, frames buf.MultiBuf
 	scheme := s.paddingScheme
 	s.schemeMu.RUnlock()
 	pktSizes := scheme.GenerateRecordPayloadSizes(packetIndex)
+	// 合并写入可能留有未 flush 的数据，先单独发出，避免混进 padding 记录改变其长度
+	if err := s.fw.flush(); err != nil {
+		buf.ReleaseMulti(frames)
+		return err
+	}
 	if scheme == nil || packetIndex >= scheme.stop || len(pktSizes) == 0 {
 		err := s.fw.bw.WriteMultiBuffer(frames)
 		if err != nil {
