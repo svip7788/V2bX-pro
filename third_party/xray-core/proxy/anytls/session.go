@@ -35,8 +35,6 @@ type session struct {
 	fw       *frameWriter
 
 	writeMu sync.Mutex
-	// 已排队或正在写的 writeCoalesced 调用数
-	pendingWrites atomic.Int32
 
 	streamsMu sync.Mutex
 	streams   map[uint32]*stream
@@ -464,25 +462,13 @@ func (s *session) finishStream(sid uint32, err error) {
 	st.close(err)
 }
 
-// writeCoalesced 只由最后一个排队的写入者 flush，让并发流的小帧合并进同一次 TLS 写入。
-// padding 路径不能用它：padding 依赖每次 flush 单独成一条 TLS 记录。
-func (s *session) writeCoalesced(write func() error) error {
-	s.pendingWrites.Add(1)
+func (s *session) sendFrame(f *frame) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	err := write()
-	if s.pendingWrites.Add(-1) == 0 {
-		if ferr := s.fw.flush(); err == nil {
-			err = ferr
-		}
+	if err := s.fw.writeFrame(f); err != nil {
+		return err
 	}
-	return err
-}
-
-func (s *session) sendFrame(f *frame) error {
-	return s.writeCoalesced(func() error {
-		return s.fw.writeFrame(f)
-	})
+	return s.fw.flush()
 }
 
 func (s *session) sendStreamData(sid uint32, data buf.MultiBuffer, packetIndex uint32) error {
@@ -504,9 +490,12 @@ func (s *session) sendStreamData(sid uint32, data buf.MultiBuffer, packetIndex u
 				return err
 			}
 		} else {
-			err := s.writeCoalesced(func() error {
-				return s.fw.writeMultiBuffer(cmdPSH, sid, chunk)
-			})
+			s.writeMu.Lock()
+			err := s.fw.writeMultiBuffer(cmdPSH, sid, chunk)
+			if err == nil {
+				err = s.fw.flush()
+			}
+			s.writeMu.Unlock()
 			if err != nil {
 				buf.ReleaseMulti(data)
 				return err

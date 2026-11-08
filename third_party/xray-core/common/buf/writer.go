@@ -79,7 +79,6 @@ type BufferedWriter struct {
 	buffer    *Buffer
 	buffered  bool
 	flushNext bool
-	size      int32
 }
 
 // NewBufferedWriter creates a new BufferedWriter.
@@ -89,22 +88,6 @@ func NewBufferedWriter(writer Writer) *BufferedWriter {
 		buffer:   New(),
 		buffered: true,
 	}
-}
-
-// NewBufferedWriterSize 缓冲至少 size 字节才因写满而 flush；缓冲在 flush 后归还，空闲时不占内存
-func NewBufferedWriterSize(writer Writer, size int32) *BufferedWriter {
-	return &BufferedWriter{
-		writer:   writer,
-		buffered: true,
-		size:     size,
-	}
-}
-
-func (w *BufferedWriter) newBuffer() *Buffer {
-	if w.size > Size {
-		return NewWithSize(w.size)
-	}
-	return New()
 }
 
 // WriteByte implements io.ByteWriter.
@@ -130,7 +113,7 @@ func (w *BufferedWriter) Write(b []byte) (int, error) {
 	totalBytes := 0
 	for len(b) > 0 {
 		if w.buffer == nil {
-			w.buffer = w.newBuffer()
+			w.buffer = New()
 		}
 
 		nBytes, err := w.buffer.Write(b)
@@ -171,7 +154,7 @@ func (w *BufferedWriter) WriteMultiBuffer(b MultiBuffer) error {
 
 	for !reader.MultiBuffer.IsEmpty() {
 		if w.buffer == nil {
-			w.buffer = w.newBuffer()
+			w.buffer = New()
 		}
 		common.Must2(w.buffer.ReadFrom(&reader))
 		if w.buffer.IsFull() {

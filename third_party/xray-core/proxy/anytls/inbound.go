@@ -89,7 +89,7 @@ func (s *Server) Process(ctx context.Context, network xnet.Network, conn stat.Co
 		server:         s,
 		conn:           conn,
 		br:             &buf.BufferedReader{Reader: buf.NewReader(conn)},
-		bw:             buf.NewBufferedWriterSize(buf.NewWriter(conn), tlsMaxPlaintext),
+		bw:             buf.NewBufferedWriter(buf.NewWriter(conn)),
 		streams:        make(map[uint32]*stream),
 		dispatcher:     dispatcher,
 		connectionIdle: sessPol.Timeouts.ConnectionIdle,

@@ -82,9 +82,6 @@ func newFrameWriter(bw *buf.BufferedWriter) *frameWriter {
 
 const maxFramePayload = 0xffff
 
-// TLS 单条记录的明文上限，服务端写缓冲按此大小攒满再发
-const tlsMaxPlaintext = 16384
-
 func (w *frameWriter) writeFrame(f *frame) error {
 	if f == nil {
 		return nil
@@ -101,6 +98,12 @@ func (w *frameWriter) writeFrame(f *frame) error {
 	}
 
 	if len(f.data) > 0 {
+		// Flush header first if data is large (>= 8KB)
+		if len(f.data) >= 8192 {
+			if err := w.bw.Flush(); err != nil {
+				return err
+			}
+		}
 		_, err := w.bw.Write(f.data)
 		return err
 	}
