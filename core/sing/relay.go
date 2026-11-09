@@ -92,6 +92,8 @@ func (b *Sing) buildRelayOutbound(o *relay.Outbound) (string, any, error) {
 
 // addRelayOutbounds 单条转发出站失败不影响节点上线，命中时回落到原路由
 func (b *Sing) addRelayOutbounds(nodeTag string, rules []panel.RelayRule) {
+	var added []*relay.Outbound
+	defer func() { relay.AllowEgress(nodeTag, added) }()
 	for _, r := range rules {
 		o, err := relay.ParseOutbound(r.Outbound)
 		if err != nil {
@@ -108,7 +110,9 @@ func (b *Sing) addRelayOutbounds(nodeTag string, rules []panel.RelayRule) {
 		}
 		if err != nil {
 			llog.WithFields(llog.Fields{"tag": nodeTag, "route": r.Id, "err": err}).Error("Add relay outbound failed")
+			continue
 		}
+		added = append(added, o)
 	}
 }
 

@@ -50,6 +50,8 @@ func buildRelayOutbound(tag string, o *relay.Outbound) (*core.OutboundHandlerCon
 func (c *Xray) addRelayOutbounds(nodeTag string, rules []panel.RelayRule) {
 	// 重载失败重试时可能残留同名出站，xray 不允许重复 tag
 	c.removeRelayOutbounds(nodeTag)
+	var added []*relay.Outbound
+	defer func() { relay.AllowEgress(nodeTag, added) }()
 	for _, r := range rules {
 		o, err := relay.ParseOutbound(r.Outbound)
 		if err != nil {
@@ -65,7 +67,9 @@ func (c *Xray) addRelayOutbounds(nodeTag string, rules []panel.RelayRule) {
 		}
 		if err != nil {
 			log.WithFields(log.Fields{"tag": nodeTag, "route": r.Id, "err": err}).Error("Add relay outbound failed")
+			continue
 		}
+		added = append(added, o)
 	}
 }
 
