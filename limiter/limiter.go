@@ -35,6 +35,8 @@ type Limiter struct {
 	userDevices   sync.Map // taguuid -> *userDeviceState
 	uuidToUID     sync.Map // uuid -> int
 	aliveList     map[int]int
+	aliveIPs      map[int][]string // 面板 sync.devices 下发的全节点在线 IP，nil 表示只有计数
+	aliveIPsAt    time.Time
 	dyWhitelist   map[int]struct{}
 	dyTimeRanges  []timeRange
 	dyConfig      conf.DynamicSpeedLimitConfig
@@ -46,6 +48,9 @@ type Limiter struct {
 
 const defaultBTBanDuration = 2 * time.Minute
 
+// WS 断开后不再有 sync.devices，过期的 IP 列表不能继续放行，退回只按计数判断
+const aliveIPsMaxAge = 10 * time.Minute
+
 type UserLimitInfo struct {
 	UID               int
 	SpeedLimit        int
@@ -53,6 +58,36 @@ type UserLimitInfo struct {
 	DynamicSpeedLimit int
 	ExpireTime        int64
 	OverLimit         bool
+	ShareDivisor      int   // 面板 speed.share：固定限速按全节点平分的份数
+	ShareExpire       int64 // unix 秒
+}
+
+// sharedSpeedLimit 返回按全节点平分后的固定限速，未平分或已过期时为原值
+func (u *UserLimitInfo) sharedSpeedLimit(now int64) int {
+	if u.SpeedLimit <= 0 || u.ShareDivisor <= 1 || u.ShareExpire <= now {
+		return u.SpeedLimit
+	}
+	return max(1, (u.SpeedLimit+u.ShareDivisor-1)/u.ShareDivisor)
+}
+
+// UpdateSpeedShare 设置用户固定限速的平分份数，返回生效限速是否变低（变低时须断开现有连接才能生效；
+// 变高不断开，新连接自然按新限速）
+func (l *Limiter) UpdateSpeedShare(tag, uuid string, divisor int, expire time.Time) (bool, error) {
+	key := format.UserTag(tag, uuid)
+	v, ok := l.userLimitInfo.Load(key)
+	if !ok {
+		return false, errors.New("not found")
+	}
+	old := v.(*UserLimitInfo)
+	now := time.Now().Unix()
+	info := *old
+	info.ShareDivisor = divisor
+	info.ShareExpire = expire.Unix()
+	if divisor <= 1 {
+		info.ShareDivisor, info.ShareExpire = 0, 0
+	}
+	l.userLimitInfo.Store(key, &info)
+	return info.sharedSpeedLimit(now) < old.sharedSpeedLimit(now), nil
 }
 
 type userDeviceState struct {
@@ -78,7 +113,10 @@ func (s *userDeviceState) setUID(uid int) {
 	s.mu.Unlock()
 }
 
-func (s *userDeviceState) allow(ip string, deviceLimit int, aliveCount int) bool {
+// allow 返回 true 表示拒绝。aliveIPs 非 nil 时是面板汇总的全节点在线 IP：
+// 已在其中的 IP 是同一设备换节点或多节点并用，直接放行；设备数按本节点与全节点 IP 的并集计。
+// aliveIPs 为 nil（只有 alivelist 计数）时只能取两者较大值。
+func (s *userDeviceState) allow(ip string, deviceLimit int, aliveCount int, aliveIPs []string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.current == nil {
@@ -93,7 +131,19 @@ func (s *userDeviceState) allow(ip string, deviceLimit int, aliveCount int) bool
 		return false
 	}
 	knownCount := len(s.current) + len(s.reported)
-	if aliveCount > knownCount {
+	if aliveIPs != nil {
+		for _, g := range aliveIPs {
+			if g == ip {
+				s.current[ip] = struct{}{}
+				return false
+			}
+			_, inCurrent := s.current[g]
+			_, inReported := s.reported[g]
+			if !inCurrent && !inReported {
+				knownCount++
+			}
+		}
+	} else if aliveCount > knownCount {
 		knownCount = aliveCount
 	}
 	if deviceLimit > 0 && knownCount >= deviceLimit {
@@ -205,6 +255,37 @@ func (l *Limiter) UpdateUser(tag string, added []panel.UserInfo, deleted []panel
 	}
 }
 
+// UpdateUserLimit 原地更新固定限速和设备数，保留动态限速、平分份额和在线设备状态；
+// 返回生效限速变低的 uuid（限速桶在建连时取定，须断开现有连接才能生效）
+func (l *Limiter) UpdateUserLimit(tag string, users []panel.UserInfo) (tightened []string) {
+	now := time.Now().Unix()
+	effective := func(u *UserLimitInfo) int {
+		s := u.sharedSpeedLimit(now)
+		if u.DynamicSpeedLimit > 0 && (u.ExpireTime == 0 || u.ExpireTime >= now) {
+			s = determineSpeedLimit(s, u.DynamicSpeedLimit)
+		}
+		return determineSpeedLimit(l.SpeedLimit, s)
+	}
+	for i := range users {
+		key := format.UserTag(tag, users[i].Uuid)
+		info := UserLimitInfo{UID: users[i].Id}
+		oldLimit := l.SpeedLimit
+		if v, ok := l.userLimitInfo.Load(key); ok {
+			old := v.(*UserLimitInfo)
+			info = *old
+			oldLimit = effective(old)
+		}
+		info.SpeedLimit = users[i].SpeedLimit
+		info.DeviceLimit = users[i].DeviceLimit
+		l.userLimitInfo.Store(key, &info)
+		l.uuidToUID.Store(users[i].Uuid, users[i].Id)
+		if newLimit := effective(&info); newLimit > 0 && (oldLimit == 0 || newLimit < oldLimit) {
+			tightened = append(tightened, users[i].Uuid)
+		}
+	}
+	return tightened
+}
+
 func (l *Limiter) IsWhitelisted(uid int) bool {
 	if l.dyWhitelist == nil {
 		return false
@@ -293,19 +374,21 @@ func (l *Limiter) CheckLimit(taguuid string, ip string, isTcp bool, noSSUDP bool
 	u := v.(*UserLimitInfo)
 	deviceLimit = u.DeviceLimit
 	uid = u.UID
-	dynamicExpired := u.ExpireTime != 0 && u.ExpireTime < time.Now().Unix()
+	now := time.Now().Unix()
+	speedLimit := u.sharedSpeedLimit(now)
+	dynamicExpired := u.ExpireTime != 0 && u.ExpireTime < now
 	if dynamicExpired {
-		userLimit = u.SpeedLimit
+		userLimit = speedLimit
 	} else if u.DynamicSpeedLimit > 0 {
-		userLimit = determineSpeedLimit(u.SpeedLimit, u.DynamicSpeedLimit)
+		userLimit = determineSpeedLimit(speedLimit, u.DynamicSpeedLimit)
 	} else {
-		userLimit = u.SpeedLimit
+		userLimit = speedLimit
 	}
 
 	if noSSUDP {
-		aliveIp := l.getAliveCount(uid)
+		aliveCount, aliveIPs := l.getAlive(uid)
 		state := l.getOrCreateDeviceState(taguuid, uid)
-		if state.allow(ip, deviceLimit, aliveIp) {
+		if state.allow(ip, deviceLimit, aliveCount, aliveIPs) {
 			return nil, true
 		}
 	}
@@ -393,10 +476,26 @@ func (l *Limiter) MarkOnlineDeviceReported() {
 	})
 }
 
-func (l *Limiter) getAliveCount(uid int) int {
+// SetAliveIPs 设置面板下发的全节点在线 IP（uid => ips），at 为收到时间
+func (l *Limiter) SetAliveIPs(devices map[int][]string, at time.Time) {
+	l.aliveMu.Lock()
+	l.aliveIPs = devices
+	l.aliveIPsAt = at
+	l.aliveMu.Unlock()
+}
+
+// getAlive 返回 alivelist 计数，以及未过期时的全节点在线 IP（用户不在线时为空切片而非 nil）
+func (l *Limiter) getAlive(uid int) (int, []string) {
 	l.aliveMu.RLock()
 	defer l.aliveMu.RUnlock()
-	return l.aliveList[uid]
+	if l.aliveIPs != nil && time.Since(l.aliveIPsAt) <= aliveIPsMaxAge {
+		ips := l.aliveIPs[uid]
+		if ips == nil {
+			ips = []string{}
+		}
+		return len(ips), ips
+	}
+	return l.aliveList[uid], nil
 }
 
 func (l *Limiter) getOrCreateDeviceState(taguuid string, uid int) *userDeviceState {

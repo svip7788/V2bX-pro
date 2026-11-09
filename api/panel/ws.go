@@ -51,6 +51,15 @@ type WSSpeedLimitData struct {
 	} `json:"users"`
 }
 
+// WSSpeedShareData 用户同时在多个节点活跃时，面板下发固定限速的平分份数
+type WSSpeedShareData struct {
+	Users []struct {
+		ID      int `json:"id"`
+		Divisor int `json:"divisor"` // 1 表示恢复完整限速
+		TTL     int `json:"ttl"`     // 秒
+	} `json:"users"`
+}
+
 type WSDevicesData struct {
 	Users map[string][]string `json:"users"`
 }

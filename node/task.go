@@ -202,12 +202,14 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 				aliveList = c.aliveMap
 			}
 			l := limiter.AddLimiter(c.tag, &c.LimitConfig, c.userList, aliveList)
+			l.SetAliveIPs(c.aliveIPs, c.aliveIPsAt)
 			c.limiter = l
 		} else if newU != nil {
-			deleted, added := compareUserList(oldUsers, nextUsers)
+			deleted, added, updated := compareUserList(oldUsers, nextUsers)
 			if len(added) > 0 || len(deleted) > 0 {
 				c.limiter.UpdateUser(c.tag, added, deleted)
 			}
+			c.limiter.UpdateUserLimit(c.tag, updated)
 		}
 		c.limiter.SetDynamicConfig(&c.LimitConfig)
 		// update alive list

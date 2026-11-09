@@ -11,6 +11,21 @@ import (
 	"github.com/InazumaV/V2bX/api/panel"
 )
 
+func TestCompareUserListLimitChangeIsUpdate(t *testing.T) {
+	old := []panel.UserInfo{{Id: 1, Uuid: "a", SpeedLimit: 10}, {Id: 2, Uuid: "b"}, {Id: 3, Uuid: "c"}}
+	next := []panel.UserInfo{{Id: 1, Uuid: "a", SpeedLimit: 20, DeviceLimit: 3}, {Id: 3, Uuid: "c"}, {Id: 4, Uuid: "d"}}
+	deleted, added, updated := compareUserList(old, next)
+	if len(deleted) != 1 || deleted[0].Id != 2 {
+		t.Fatalf("deleted = %v", deleted)
+	}
+	if len(added) != 1 || added[0].Id != 4 {
+		t.Fatalf("added = %v", added)
+	}
+	if len(updated) != 1 || updated[0].Id != 1 || updated[0].SpeedLimit != 20 {
+		t.Fatalf("updated = %v", updated)
+	}
+}
+
 func TestKeepRecentWSChanges(t *testing.T) {
 	now := time.Now()
 	c := &Controller{

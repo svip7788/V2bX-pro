@@ -233,33 +233,28 @@ func (c *Controller) addDynamicTraffic(userTraffic []panel.UserTraffic) {
 	c.checkDynamicSpeed()
 }
 
-type userCompareKey struct {
-	uuid   string
-	speed  int
-	device int
-}
-
-func compareUserList(old, new []panel.UserInfo) (deleted, added []panel.UserInfo) {
-	oldMap := make(map[userCompareKey]int, len(old))
+// compareUserList 只有限速/设备数变化的用户归入 updated：内核用户与 uuid 绑定，不必删了重加
+// （删用户会丢掉未上报的流量计数并断开全部连接）
+func compareUserList(old, new []panel.UserInfo) (deleted, added, updated []panel.UserInfo) {
+	oldMap := make(map[string]int, len(old))
 	for i, user := range old {
-		key := userCompareKey{
-			uuid:   user.Uuid,
-			speed:  user.SpeedLimit,
-			device: user.DeviceLimit,
-		}
-		oldMap[key] = i
+		oldMap[user.Uuid] = i
 	}
 
 	for _, user := range new {
-		key := userCompareKey{
-			uuid:   user.Uuid,
-			speed:  user.SpeedLimit,
-			device: user.DeviceLimit,
-		}
-		if _, exists := oldMap[key]; !exists {
+		i, exists := oldMap[user.Uuid]
+		if !exists {
 			added = append(added, user)
-		} else {
-			delete(oldMap, key)
+			continue
+		}
+		delete(oldMap, user.Uuid)
+		prev := old[i]
+		switch {
+		case prev.Id != user.Id:
+			deleted = append(deleted, prev)
+			added = append(added, user)
+		case prev.SpeedLimit != user.SpeedLimit || prev.DeviceLimit != user.DeviceLimit:
+			updated = append(updated, user)
 		}
 	}
 
@@ -267,5 +262,5 @@ func compareUserList(old, new []panel.UserInfo) (deleted, added []panel.UserInfo
 		deleted = append(deleted, old[index])
 	}
 
-	return deleted, added
+	return deleted, added, updated
 }
