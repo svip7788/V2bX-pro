@@ -93,6 +93,16 @@ func TestExcessRejectsAndFreesSlot(t *testing.T) {
 	if _, reject := lim.CheckLimit(taguuid, "3.3.3.3", true, true); reject {
 		t.Fatal("slot of excess device should be freed")
 	}
+	// 面板汇总里还留着被踢的 2.2.2.2，不应再占名额
+	lim.MarkOnlineDeviceReported()
+	lim.MarkOnlineDeviceReported()
+	lim.SetAliveIPs(map[int][]string{1: {"1.1.1.1", "2.2.2.2"}}, time.Now())
+	if _, reject := lim.CheckLimit(taguuid, "4.4.4.4", true, true); reject {
+		t.Fatal("excess device still in alive list should not take a slot")
+	}
+	if _, reject := lim.CheckLimit(taguuid, "5.5.5.5", true, true); !reject {
+		t.Fatal("limit should still apply after excess is excluded")
+	}
 	lim.SetExcess(map[int][]string{1: {"2.2.2.2"}}, time.Now().Add(-aliveIPsMaxAge-time.Second))
 	if lim.IsExcess(1, "2.2.2.2") {
 		t.Fatal("stale excess should not apply")

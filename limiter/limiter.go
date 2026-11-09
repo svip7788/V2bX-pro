@@ -615,18 +615,32 @@ func normalizeAliveIPs(devices map[int][]string) map[int][]string {
 	return out
 }
 
-// getAlive 返回 alivelist 计数，以及未过期时的全节点在线 IP（用户不在线时为空切片而非 nil）
+// getAlive 返回 alivelist 计数，以及未过期时的全节点在线 IP（用户不在线时为空切片而非 nil）；
+// 已判超限的设备被踢后还会在面板汇总里停留一两个上报周期，不占名额
 func (l *Limiter) getAlive(uid int) (int, []string) {
 	l.aliveMu.RLock()
 	defer l.aliveMu.RUnlock()
+	excess := l.excess[uid]
+	if time.Since(l.excessAt) > aliveIPsMaxAge {
+		excess = nil
+	}
 	if l.aliveIPs != nil && time.Since(l.aliveIPsAt) <= aliveIPsMaxAge {
 		ips := l.aliveIPs[uid]
 		if ips == nil {
 			ips = []string{}
 		}
+		if len(excess) > 0 {
+			kept := make([]string, 0, len(ips))
+			for _, k := range ips {
+				if _, ok := excess[k]; !ok {
+					kept = append(kept, k)
+				}
+			}
+			ips = kept
+		}
 		return len(ips), ips
 	}
-	return l.aliveList[uid], nil
+	return max(0, l.aliveList[uid]-len(excess)), nil
 }
 
 func (l *Limiter) getOrCreateDeviceState(taguuid string, uid int) *userDeviceState {

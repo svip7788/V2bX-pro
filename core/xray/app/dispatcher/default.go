@@ -220,7 +220,8 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, network net.Network) (*
 			writer:  uplinkWriter,
 			manager: lm,
 		}
-		lm.AddLink(managedWriter, outboundLink.Reader, sessionInbound.Conn, deviceIP(sessionInbound))
+		ip, counted := deviceIP(sessionInbound)
+		lm.AddLink(managedWriter, outboundLink.Reader, sessionInbound.Conn, ip, counted)
 		// Safety net: the tracking map holds a strong reference to the
 		// connection and is normally cleaned up via ManagedWriter.Close().
 		// Some connections end without an explicit Close (xray abandons the
@@ -409,7 +410,8 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 			Reader:  &buf.TimeoutWrapperReader{Reader: outbound.Reader},
 			Counter: &ts.UpCounter,
 		}
-		lm.AddLink(managedWriter, outbound.Reader, sessionInbound.Conn, deviceIP(sessionInbound))
+		ip, counted := deviceIP(sessionInbound)
+		lm.AddLink(managedWriter, outbound.Reader, sessionInbound.Conn, ip, counted)
 		context.AfterFunc(ctx, func() { _ = managedWriter.Close() })
 		outbound.Writer = &dispatcher.SizeStatWriter{
 			Counter: downcounter,
@@ -777,12 +779,9 @@ func (d *DefaultDispatcher) getOrCreateCounter(tag string) *counter.TrafficCount
 	return c.(*counter.TrafficCounter)
 }
 
-// deviceIP 与 CheckLimit 的 noSSUDP 条件一致：只有 TCP 来源做设备数检查
-func deviceIP(in *session.Inbound) string {
-	if in.Source.Network != net.Network_TCP {
-		return ""
-	}
-	return in.Source.Address.IP().String()
+// deviceIP 返回来源 IP，以及是否计入在线设备：与 CheckLimit 的 noSSUDP 条件一致，只有 TCP 来源做设备数检查
+func deviceIP(in *session.Inbound) (string, bool) {
+	return in.Source.Address.IP().String(), in.Source.Network == net.Network_TCP
 }
 
 func (d *DefaultDispatcher) getOrCreateLinkManager(email string) *LinkManager {

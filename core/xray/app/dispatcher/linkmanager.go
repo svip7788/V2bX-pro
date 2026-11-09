@@ -26,8 +26,9 @@ type managedLink struct {
 	reader buf.Reader
 	// DispatchLink（如 VLESS）的读写端直接包着客户端连接，既不可中断也不可关闭，
 	// 必须关掉原始连接才能让会话立即结束。
-	conn net.Conn
-	ip   string // 做过设备数检查的来源 IP，其余为空
+	conn    net.Conn
+	ip      string // 来源 IP，踢超限设备时按它断开
+	counted bool   // 做过设备数检查，计入在线设备
 }
 
 type LinkManager struct {
@@ -37,23 +38,23 @@ type LinkManager struct {
 	owner *sync.Map
 }
 
-func (m *LinkManager) AddLink(writer *ManagedWriter, reader buf.Reader, conn net.Conn, ip string) {
+func (m *LinkManager) AddLink(writer *ManagedWriter, reader buf.Reader, conn net.Conn, ip string, counted bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.owner != nil && len(m.key) > 0 {
 		m.owner.Store(m.key, m)
 	}
-	m.links[writer] = managedLink{reader: reader, conn: conn, ip: ip}
+	m.links[writer] = managedLink{reader: reader, conn: conn, ip: ip, counted: counted}
 }
 
-// IPs 返回活跃连接的来源 IP（去重）
+// IPs 返回计入在线设备的活跃连接来源 IP（去重）
 func (m *LinkManager) IPs() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var ips []string
 	seen := make(map[string]struct{}, 1)
 	for _, l := range m.links {
-		if l.ip == "" {
+		if !l.counted || l.ip == "" {
 			continue
 		}
 		if _, ok := seen[l.ip]; !ok {
