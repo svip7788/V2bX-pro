@@ -32,8 +32,8 @@ func TestRankMirrorsFastestFirst(t *testing.T) {
 	defer fast.Close()
 	defer broken.Close()
 
-	got := rankMirrors(context.Background(), []string{broken.URL + "/", slow.URL + "/", fast.URL + "/"}, "a.zip")
-	want := []string{fast.URL + "/", slow.URL + "/", broken.URL + "/"}
+	got := rankMirrors(context.Background(), []string{broken.URL + "/a.zip", slow.URL + "/a.zip", fast.URL + "/a.zip"})
+	want := []string{fast.URL + "/a.zip", slow.URL + "/a.zip", broken.URL + "/a.zip"}
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("rank = %v, want %v", got, want)

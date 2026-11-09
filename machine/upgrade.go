@@ -126,21 +126,35 @@ func (r *commandRunner) upgrade(cmd command) (bool, string, error) {
 		}
 		return true
 	}
+	// 面板缓存与 GitHub 各源一起测速，谁快用谁：部分节点到面板反而比到 GitHub 慢
+	var panelURL string
 	if strings.HasPrefix(p.Mirror, "https://") || strings.HasPrefix(p.Mirror, "http://") {
-		downloaded = try(p.Mirror+asset, downloadOptions{maxTime: 10 * time.Minute, minSpeed: 50 << 10})
+		panelURL = p.Mirror + asset
 	}
-	if !downloaded {
-		logf("测速 GitHub 下载源")
-		for _, mirror := range rankMirrors(r.m.ctx, githubMirrors, path) {
-			if downloaded = try(mirror+path, downloadOptions{maxTime: 10 * time.Minute, minSpeed: 100 << 10}); downloaded {
-				break
-			}
+	urls := make([]string, 0, len(githubMirrors)+1)
+	if panelURL != "" {
+		urls = append(urls, panelURL)
+	}
+	for _, m := range githubMirrors {
+		urls = append(urls, m+path)
+	}
+	logf("测速下载源")
+	for _, url := range rankMirrors(r.m.ctx, urls) {
+		if downloaded = try(url, downloadOptions{maxTime: 10 * time.Minute, minSpeed: 100 << 10}); downloaded {
+			break
 		}
 	}
 	if !downloaded {
 		logf("所有下载源均较慢，放宽限速重试")
-		for _, mirror := range relaxedMirrors {
-			if downloaded = try(mirror+path, downloadOptions{maxTime: 30 * time.Minute, minSpeed: 20 << 10}); downloaded {
+		relaxed := make([]string, 0, len(relaxedMirrors)+1)
+		if panelURL != "" {
+			relaxed = append(relaxed, panelURL)
+		}
+		for _, m := range relaxedMirrors {
+			relaxed = append(relaxed, m+path)
+		}
+		for _, url := range relaxed {
+			if downloaded = try(url, downloadOptions{maxTime: 30 * time.Minute, minSpeed: 20 << 10}); downloaded {
 				break
 			}
 		}
@@ -302,21 +316,21 @@ const (
 )
 
 // rankMirrors 并发拉取各源开头一段测速，按速度从快到慢排序；测速失败的排在最后、保持原顺序
-func rankMirrors(ctx context.Context, mirrors []string, path string) []string {
-	speeds := make([]float64, len(mirrors))
+func rankMirrors(ctx context.Context, urls []string) []string {
+	speeds := make([]float64, len(urls))
 	var wg sync.WaitGroup
-	for i, m := range mirrors {
+	for i, u := range urls {
 		wg.Add(1)
 		go func(i int, url string) {
 			defer wg.Done()
 			speeds[i] = probeSpeed(ctx, url)
-		}(i, m+path)
+		}(i, u)
 	}
 	wg.Wait()
-	ranked := slices.Clone(mirrors)
-	idx := make(map[string]int, len(mirrors))
-	for i, m := range mirrors {
-		idx[m] = i
+	ranked := slices.Clone(urls)
+	idx := make(map[string]int, len(urls))
+	for i, u := range urls {
+		idx[u] = i
 	}
 	slices.SortStableFunc(ranked, func(a, b string) int {
 		return cmp.Compare(speeds[idx[b]], speeds[idx[a]])
