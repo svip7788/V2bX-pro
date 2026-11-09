@@ -95,6 +95,8 @@ func (c *Controller) Start() error {
 			"err": err,
 		}).Warn("Get user alive list failed, fallback to empty alive list")
 		c.aliveMap = make(map[int]int)
+	} else {
+		c.applyDevicePrefix()
 	}
 	if len(c.Options.Name) == 0 {
 		c.tag = c.buildNodeTag(node)

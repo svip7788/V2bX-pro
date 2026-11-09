@@ -226,6 +226,42 @@ func TestDeviceKeyMergesIPv6Prefix(t *testing.T) {
 	}
 }
 
+func TestDeviceKeyMergesIPv4Prefix(t *testing.T) {
+	SetIPv4Prefix(24)
+	defer SetIPv4Prefix(32)
+	cases := map[string]string{
+		"112.96.84.14":    "112.96.84.0/24",
+		"::ffff:1.2.3.4":  "1.2.3.0/24",
+		"112.96.84.0/24":  "112.96.84.0/24",
+		"2001:db8:1:2::1": "2001:db8:1:2::/64",
+	}
+	for in, want := range cases {
+		if got := deviceKey(in); got != want {
+			t.Errorf("deviceKey(%q) = %q, want %q", in, got, want)
+		}
+	}
+
+	Init()
+	lim := AddLimiter("tag4", &conf.LimitConfig{}, []panel.UserInfo{
+		{Id: 1, Uuid: "u1", DeviceLimit: 1},
+	}, map[int]int{})
+	taguuid := format.UserTag("tag4", "u1")
+	if _, reject := lim.CheckLimit(taguuid, "112.96.84.14", true, true); reject {
+		t.Fatal("first ipv4 should pass")
+	}
+	if _, reject := lim.CheckLimit(taguuid, "112.96.84.206", true, true); reject {
+		t.Fatal("cgnat ipv4 in same /24 is the same device")
+	}
+	if _, reject := lim.CheckLimit(taguuid, "112.96.85.1", true, true); !reject {
+		t.Fatal("ipv4 in another /24 should count as a new device")
+	}
+
+	SetIPv4Prefix(32)
+	if got := deviceKey("1.2.3.4"); got != "1.2.3.4" {
+		t.Errorf("prefix 32 should not merge, got %q", got)
+	}
+}
+
 func TestTouchActiveDevicesKeepsLongLivedConn(t *testing.T) {
 	Init()
 	lim := AddLimiter("tag", &conf.LimitConfig{}, []panel.UserInfo{

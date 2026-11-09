@@ -153,6 +153,8 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 			"err": err,
 		}).Warn("Get alive list failed, keep old alive list")
 		newA = nil
+	} else {
+		c.applyDevicePrefix()
 	}
 	// 只改了限速/监控策略：原地生效，不重建入站，避免断开所有用户
 	if newN != nil && !retrying && c.info != nil && newN.CoreHash != "" && newN.CoreHash == c.info.CoreHash {
@@ -336,6 +338,13 @@ func (c *Controller) applyIPWatch(n *panel.NodeInfo) {
 		m = ipwatch.New(w.Targets, w.Threshold)
 	}
 	ipwatch.Set(c.tag, m)
+}
+
+// applyDevicePrefix 老面板不下发时保持现状（默认不归并）
+func (c *Controller) applyDevicePrefix() {
+	if p := c.apiClient.AliveMap.DeviceIPv4Prefix; p > 0 {
+		limiter.SetIPv4Prefix(p)
+	}
 }
 
 // limitUserSpeed 对用户施加动态限速；限速桶在建连时取定，断开现有连接让重连后立即按新限速走

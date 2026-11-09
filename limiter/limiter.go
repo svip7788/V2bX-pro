@@ -356,7 +356,18 @@ func (l *Limiter) UpdateDynamicSpeedLimit(tag, uuid string, limit int, expire ti
 	return nil
 }
 
-// deviceKey 设备计数用的 IP 键：IPv6 临时地址会定期更换，同一 /64 视为同一设备
+var ipv4Prefix atomic.Int32
+
+// SetIPv4Prefix 设置设备计数的 IPv4 归并前缀（面板随 alivelist 下发），<8 或 >=32 为不归并
+func SetIPv4Prefix(prefix int) {
+	if prefix < 8 || prefix > 32 {
+		prefix = 32
+	}
+	ipv4Prefix.Store(int32(prefix))
+}
+
+// deviceKey 设备计数用的 IP 键：IPv6 临时地址会定期更换，同一 /64 视为同一设备；
+// 移动网络 CGNAT 出口 IPv4 频繁变动，按面板下发的前缀归并
 func deviceKey(ip string) string {
 	addr, err := netip.ParseAddr(ip)
 	if err != nil {
@@ -364,6 +375,10 @@ func deviceKey(ip string) string {
 	}
 	addr = addr.Unmap()
 	if addr.Is4() {
+		if p := int(ipv4Prefix.Load()); p >= 8 && p < 32 {
+			pfx, _ := addr.Prefix(p)
+			return pfx.String()
+		}
 		return addr.String()
 	}
 	p, _ := addr.WithZone("").Prefix(64)
