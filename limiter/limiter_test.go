@@ -66,6 +66,43 @@ func TestAliveIPsAllowSameDeviceOnOtherNode(t *testing.T) {
 	}
 }
 
+func TestExcessRejectsAndFreesSlot(t *testing.T) {
+	Init()
+	lim := AddLimiter("tag", &conf.LimitConfig{}, []panel.UserInfo{
+		{Id: 1, Uuid: "u1", DeviceLimit: 2},
+	}, map[int]int{})
+	taguuid := format.UserTag("tag", "u1")
+
+	for _, ip := range []string{"1.1.1.1", "2.2.2.2"} {
+		if _, reject := lim.CheckLimit(taguuid, ip, true, true); reject {
+			t.Fatalf("%s should pass", ip)
+		}
+	}
+	// 面板裁决 2.2.2.2 超限（别的节点先占了名额）
+	lim.SetExcess(map[int][]string{1: {"2.2.2.2"}}, time.Now())
+	if _, reject := lim.CheckLimit(taguuid, "2.2.2.2", true, true); !reject {
+		t.Fatal("excess device should be rejected even if known locally")
+	}
+	if _, reject := lim.CheckLimit(taguuid, "2.2.2.2", false, false); !reject {
+		t.Fatal("excess device udp should be rejected")
+	}
+	if !lim.IsExcess(1, "2.2.2.2") || lim.IsExcess(1, "1.1.1.1") {
+		t.Fatal("IsExcess mismatch")
+	}
+	// 清出本节点状态后名额释放
+	if _, reject := lim.CheckLimit(taguuid, "3.3.3.3", true, true); reject {
+		t.Fatal("slot of excess device should be freed")
+	}
+	lim.SetExcess(map[int][]string{1: {"2.2.2.2"}}, time.Now().Add(-aliveIPsMaxAge-time.Second))
+	if lim.IsExcess(1, "2.2.2.2") {
+		t.Fatal("stale excess should not apply")
+	}
+	lim.SetExcess(nil, time.Now())
+	if lim.IsExcess(1, "2.2.2.2") {
+		t.Fatal("cleared excess should not apply")
+	}
+}
+
 func TestAliveIPsUnionCount(t *testing.T) {
 	Init()
 	lim := AddLimiter("tag", &conf.LimitConfig{}, []panel.UserInfo{

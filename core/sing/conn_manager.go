@@ -12,38 +12,43 @@ type managedCloser interface {
 	Close() error
 }
 
+type trackedInfo struct {
+	ip      string
+	counted bool // 做过设备数检查，计入在线设备
+}
+
 type userConnManager struct {
 	mu    sync.Mutex
-	conns map[managedCloser]string // 值为做过设备数检查的来源 IP，其余为空
+	conns map[managedCloser]trackedInfo
 	key   string
 	owner *sync.Map
 }
 
-func (m *userConnManager) Add(conn managedCloser, ip string) {
+func (m *userConnManager) Add(conn managedCloser, ip string, counted bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.owner != nil && m.key != "" {
 		m.owner.Store(m.key, m)
 	}
 	if m.conns == nil {
-		m.conns = make(map[managedCloser]string)
+		m.conns = make(map[managedCloser]trackedInfo)
 	}
-	m.conns[conn] = ip
+	m.conns[conn] = trackedInfo{ip: ip, counted: counted}
 }
 
-// IPs 返回活跃连接的来源 IP（去重）
+// IPs 返回计入在线设备的活跃连接来源 IP（去重）
 func (m *userConnManager) IPs() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var ips []string
 	seen := make(map[string]struct{}, 1)
-	for _, ip := range m.conns {
-		if ip == "" {
+	for _, info := range m.conns {
+		if !info.counted || info.ip == "" {
 			continue
 		}
-		if _, ok := seen[ip]; !ok {
-			seen[ip] = struct{}{}
-			ips = append(ips, ip)
+		if _, ok := seen[info.ip]; !ok {
+			seen[info.ip] = struct{}{}
+			ips = append(ips, info.ip)
 		}
 	}
 	return ips
@@ -67,12 +72,19 @@ func (m *userConnManager) markOwner(key string, owner *sync.Map) {
 }
 
 func (m *userConnManager) CloseAll() int {
+	return m.CloseMatching(func(string) bool { return true })
+}
+
+// CloseMatching 断开来源 IP 满足 match 的连接（含 UDP）
+func (m *userConnManager) CloseMatching(match func(ip string) bool) int {
 	m.mu.Lock()
 	snapshot := make([]managedCloser, 0, len(m.conns))
-	for conn := range m.conns {
-		snapshot = append(snapshot, conn)
+	for conn, info := range m.conns {
+		if match(info.ip) {
+			snapshot = append(snapshot, conn)
+			delete(m.conns, conn)
+		}
 	}
-	m.conns = make(map[managedCloser]string)
 	m.mu.Unlock()
 	for _, conn := range snapshot {
 		_ = conn.Close()
@@ -97,7 +109,7 @@ func newTrackedConn(conn net.Conn, manager *userConnManager, ip string, onClose 
 		manager:      manager,
 		onClose:      onClose,
 	}
-	manager.Add(tracked, ip)
+	manager.Add(tracked, ip, true)
 	return tracked
 }
 
@@ -119,13 +131,13 @@ type trackedPacketConn struct {
 	onClose func()
 }
 
-func newTrackedPacketConn(conn N.PacketConn, manager *userConnManager, onClose func()) N.PacketConn {
+func newTrackedPacketConn(conn N.PacketConn, manager *userConnManager, ip string, onClose func()) N.PacketConn {
 	tracked := &trackedPacketConn{
 		PacketConn: conn,
 		manager:    manager,
 		onClose:    onClose,
 	}
-	manager.Add(tracked, "")
+	manager.Add(tracked, ip, false)
 	return tracked
 }
 

@@ -236,7 +236,7 @@ func (h *HookServer) RoutedPacketConnection(ctx context.Context, conn N.PacketCo
 		conn = counter.NewPacketConnCounter(conn, s)
 		onClose = func() { liveClose(lc, s) }
 	}
-	conn = newTrackedPacketConn(conn, h.getConnManager(taguuid), onClose)
+	conn = newTrackedPacketConn(conn, h.getConnManager(taguuid), ip, onClose)
 	tracked := conn
 	context.AfterFunc(ctx, func() { _ = tracked.Close() })
 	return conn

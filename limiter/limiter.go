@@ -37,6 +37,8 @@ type Limiter struct {
 	aliveList     map[int]int
 	aliveIPs      map[int][]string // 面板 sync.devices 下发的全节点在线 IP，nil 表示只有计数
 	aliveIPsAt    time.Time
+	excess        map[int]map[string]struct{} // 面板裁决的超限设备计数键，拒绝其连接
+	excessAt      time.Time
 	dyWhitelist   map[int]struct{}
 	dyTimeRanges  []timeRange
 	dyConfig      conf.DynamicSpeedLimitConfig
@@ -402,6 +404,9 @@ func (l *Limiter) TouchActiveDevices(tag string, active map[string][]string) {
 			state.current = make(map[string]string, len(ips))
 		}
 		for _, ip := range ips {
+			if l.IsExcess(uid, ip) {
+				continue
+			}
 			key := deviceKey(ip)
 			state.current[key] = ip
 			delete(state.reported, key)
@@ -439,6 +444,10 @@ func (l *Limiter) CheckLimit(taguuid string, ip string, isTcp bool, noSSUDP bool
 		userLimit = speedLimit
 	}
 
+	// 超限设备的 UDP 也拒绝，否则踢掉 TCP 后仍能走 UDP
+	if deviceLimit > 0 && l.IsExcess(uid, ip) {
+		return nil, true
+	}
 	if noSSUDP {
 		aliveCount, aliveIPs := l.getAlive(uid)
 		state := l.getOrCreateDeviceState(taguuid, uid)
@@ -537,6 +546,52 @@ func (l *Limiter) SetAliveIPs(devices map[int][]string, at time.Time) {
 	l.aliveIPs = devices
 	l.aliveIPsAt = at
 	l.aliveMu.Unlock()
+}
+
+// SetExcess 设置面板裁决的超限设备（uid => 计数键），并从本节点设备状态中移除，at 为收到时间；
+// 面板按全节点首次上线先到先留，各节点结论一致
+func (l *Limiter) SetExcess(excess map[int][]string, at time.Time) {
+	var sets map[int]map[string]struct{}
+	if len(excess) > 0 {
+		sets = make(map[int]map[string]struct{}, len(excess))
+		for uid, keys := range excess {
+			set := make(map[string]struct{}, len(keys))
+			for _, k := range keys {
+				set[deviceKey(k)] = struct{}{}
+			}
+			sets[uid] = set
+		}
+	}
+	l.aliveMu.Lock()
+	l.excess, l.excessAt = sets, at
+	l.aliveMu.Unlock()
+	if sets == nil {
+		return
+	}
+	l.userDevices.Range(func(_, value any) bool {
+		state := value.(*userDeviceState)
+		state.mu.Lock()
+		if set, ok := sets[state.uid]; ok {
+			for k := range set {
+				delete(state.current, k)
+				delete(state.reported, k)
+			}
+		}
+		state.mu.Unlock()
+		return true
+	})
+}
+
+// IsExcess 该 IP 是否属于面板判定超限的设备；超过 aliveIPsMaxAge 没收到新裁决则不再生效
+func (l *Limiter) IsExcess(uid int, ip string) bool {
+	l.aliveMu.RLock()
+	defer l.aliveMu.RUnlock()
+	set, ok := l.excess[uid]
+	if !ok || time.Since(l.excessAt) > aliveIPsMaxAge {
+		return false
+	}
+	_, ok = set[deviceKey(ip)]
+	return ok
 }
 
 // normalizeAliveIPs 旧版节点上报的是原始 IPv6，按 deviceKey 归并去重后再比对

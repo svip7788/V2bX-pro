@@ -37,6 +37,8 @@ type Controller struct {
 	aliveMap                map[int]int
 	aliveIPs                map[int][]string // 最近一次 sync.devices，limiter 重建后要重新注入
 	aliveIPsAt              time.Time
+	excess                  map[int][]string // 最近一次面板裁决的超限设备，limiter 重建后要重新注入
+	excessAt                time.Time
 	info                    *panel.NodeInfo
 	nodeInfoMonitorPeriodic *task.Task
 	userReportPeriodic      *task.Task
@@ -108,6 +110,10 @@ func (c *Controller) Start() error {
 	c.applyIPWatch(node)
 	// add limiter
 	l := limiter.AddLimiter(c.tag, &c.LimitConfig, c.userList, c.aliveMap)
+	if c.apiClient.AliveMap != nil {
+		c.excess, c.excessAt = c.apiClient.AliveMap.Excess, time.Now()
+		l.SetExcess(c.excess, c.excessAt)
+	}
 	// add rule limiter
 	if err = l.UpdateRule(&node.Rules); err != nil {
 		return fmt.Errorf("update rule error: %s", err)
@@ -368,6 +374,7 @@ func (c *Controller) processWSEvent(evt panel.WSEvent) {
 		c.aliveMap = alive
 		c.aliveIPs, c.aliveIPsAt = aliveIPs, time.Now()
 		c.limiter.SetAliveIPs(c.aliveIPs, c.aliveIPsAt)
+		c.applyExcess(data.Excess)
 
 	case "speed.limit":
 		var data panel.WSSpeedLimitData

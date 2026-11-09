@@ -10,7 +10,6 @@ import (
 	"github.com/InazumaV/V2bX/common/counter"
 	"github.com/InazumaV/V2bX/common/format"
 	"github.com/InazumaV/V2bX/core"
-	log "github.com/sirupsen/logrus"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/protocol/anytls"
 	"github.com/sagernet/sing-box/protocol/hysteria"
@@ -20,6 +19,7 @@ import (
 	"github.com/sagernet/sing-box/protocol/tuic"
 	"github.com/sagernet/sing-box/protocol/vless"
 	"github.com/sagernet/sing-box/protocol/vmess"
+	log "github.com/sirupsen/logrus"
 )
 
 func (b *Sing) AddUsers(p *core.AddUsersParams) (added int, err error) {
@@ -250,6 +250,13 @@ func (b *Sing) tagUIDToUUID(tag string) map[int]string {
 func (b *Sing) CloseUserConns(tag string, uuid string) int {
 	if m, ok := b.hookServer.connManagers.Load(format.UserTag(tag, uuid)); ok {
 		return m.(*userConnManager).CloseAll()
+	}
+	return 0
+}
+
+func (b *Sing) CloseUserIPConns(tag string, uuid string, match func(ip string) bool) int {
+	if m, ok := b.hookServer.connManagers.Load(format.UserTag(tag, uuid)); ok {
+		return m.(*userConnManager).CloseMatching(match)
 	}
 	return 0
 }

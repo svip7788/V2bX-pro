@@ -23,6 +23,8 @@ type Core interface {
 	DelUsers(users []panel.UserInfo, tag string, info *panel.NodeInfo) error
 	// CloseUserConns 断开用户现有连接，返回断开数；限速变更只对新连接生效时用来让其立即生效
 	CloseUserConns(tag string, uuid string) int
+	// CloseUserIPConns 断开用户来源 IP 满足 match 的连接，返回断开数；用于踢掉超出设备数的设备
+	CloseUserIPConns(tag string, uuid string, match func(ip string) bool) int
 	// ActiveUserIPs 返回仍有活跃连接的来源 IP（uuid → ips），只含做过设备数检查的连接
 	ActiveUserIPs(tag string) map[string][]string
 	Protocols() []string

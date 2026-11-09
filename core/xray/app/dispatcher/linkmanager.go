@@ -86,12 +86,31 @@ func (m *LinkManager) CloseAll() int {
 	snapshot := m.links
 	m.links = make(map[*ManagedWriter]managedLink)
 	m.mu.Unlock()
-	for w, l := range snapshot {
+	closeLinks(snapshot)
+	return len(snapshot)
+}
+
+// CloseMatching 断开来源 IP 满足 match 的连接
+func (m *LinkManager) CloseMatching(match func(ip string) bool) int {
+	m.mu.Lock()
+	snapshot := make(map[*ManagedWriter]managedLink)
+	for w, l := range m.links {
+		if l.ip != "" && match(l.ip) {
+			snapshot[w] = l
+			delete(m.links, w)
+		}
+	}
+	m.mu.Unlock()
+	closeLinks(snapshot)
+	return len(snapshot)
+}
+
+func closeLinks(links map[*ManagedWriter]managedLink) {
+	for w, l := range links {
 		common.Close(w)
 		common.Interrupt(l.reader)
 		if l.conn != nil {
 			_ = l.conn.Close()
 		}
 	}
-	return len(snapshot)
 }

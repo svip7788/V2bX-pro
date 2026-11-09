@@ -46,6 +46,8 @@ type AliveMap struct {
 	Alive map[int]int `json:"alive"`
 	// DeviceIPv4Prefix 设备计数时 IPv4 归并前缀，与面板一致；老面板不下发为 0
 	DeviceIPv4Prefix int `json:"device_ipv4_prefix"`
+	// Excess 同 WSDevicesData.Excess
+	Excess map[int][]string `json:"excess"`
 }
 
 // GetUserList will pull user from v2board

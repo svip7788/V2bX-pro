@@ -62,6 +62,8 @@ type WSSpeedShareData struct {
 
 type WSDevicesData struct {
 	Users map[string][]string `json:"users"`
+	// Excess 超出设备数、须断开并拒绝重连的计数键（uid => keys），由面板按首次上线先到先留裁决
+	Excess map[int][]string `json:"excess"`
 }
 
 type WSClient struct {

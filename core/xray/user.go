@@ -38,6 +38,13 @@ func (c *Xray) CloseUserConns(tag string, uuid string) int {
 	return 0
 }
 
+func (c *Xray) CloseUserIPConns(tag string, uuid string, match func(ip string) bool) int {
+	if v, ok := c.dispatcher.LinkManagers.Load(format.UserTag(tag, uuid)); ok {
+		return v.(*dispatcher.LinkManager).CloseMatching(match)
+	}
+	return 0
+}
+
 func (c *Xray) ActiveUserIPs(tag string) map[string][]string {
 	prefix := tag + "|"
 	out := make(map[string][]string)

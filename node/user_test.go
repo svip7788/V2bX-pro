@@ -42,7 +42,8 @@ func (f *fakeCore) DelUsers([]panel.UserInfo, string, *panel.NodeInfo) error { r
 
 func (f *fakeCore) CloseUserConns(string, string) int { return 0 }
 
-func (f *fakeCore) ActiveUserIPs(string) map[string][]string { return nil }
+func (f *fakeCore) ActiveUserIPs(string) map[string][]string               { return nil }
+func (f *fakeCore) CloseUserIPConns(string, string, func(string) bool) int { return 0 }
 
 func (f *fakeCore) Protocols() []string { return nil }
 
@@ -62,11 +63,11 @@ func newTestController(t *testing.T, url string, core *fakeCore) *Controller {
 	}
 	tag := "test-tag"
 	return &Controller{
-		server:   core,
+		server:    core,
 		apiClient: client,
-		tag:      tag,
-		limiter:  limiter.AddLimiter(tag, &conf.LimitConfig{}, nil, map[int]int{}),
-		Options:  &conf.Options{},
+		tag:       tag,
+		limiter:   limiter.AddLimiter(tag, &conf.LimitConfig{}, nil, map[int]int{}),
+		Options:   &conf.Options{},
 	}
 }
 

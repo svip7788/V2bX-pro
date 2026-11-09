@@ -205,6 +205,7 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 			}
 			l := limiter.AddLimiter(c.tag, &c.LimitConfig, c.userList, aliveList)
 			l.SetAliveIPs(c.aliveIPs, c.aliveIPsAt)
+			l.SetExcess(c.excess, c.excessAt)
 			c.limiter = l
 		} else if newU != nil {
 			deleted, added, updated := compareUserList(oldUsers, nextUsers)
@@ -283,6 +284,7 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 	if newA != nil {
 		c.limiter.SetAliveList(newA)
 		c.aliveMap = newA
+		c.applyExcess(c.apiClient.AliveMap.Excess)
 	}
 	// node no changed, check users
 	if newU == nil {
@@ -338,6 +340,28 @@ func (c *Controller) applyIPWatch(n *panel.NodeInfo) {
 		m = ipwatch.New(w.Targets, w.Threshold)
 	}
 	ipwatch.Set(c.tag, m)
+}
+
+// applyExcess 断开面板判定超出设备数的设备（全节点首次上线先到先留），之后其连接在 CheckLimit 被拒绝；
+// 须持有 runtimeMu
+func (c *Controller) applyExcess(excess map[int][]string) {
+	c.excess, c.excessAt = excess, time.Now()
+	c.limiter.SetExcess(excess, c.excessAt)
+	for uid := range excess {
+		uuid, ok := c.uidToUUID[uid]
+		if !ok {
+			continue
+		}
+		closed := c.server.CloseUserIPConns(c.tag, uuid, func(ip string) bool { return c.limiter.IsExcess(uid, ip) })
+		if closed > 0 {
+			log.WithFields(log.Fields{
+				"tag":    c.tag,
+				"uid":    uid,
+				"keys":   excess[uid],
+				"closed": closed,
+			}).Info("Device limit exceeded, kicked newest devices")
+		}
+	}
 }
 
 // applyDevicePrefix 老面板不下发时保持现状（默认不归并）
