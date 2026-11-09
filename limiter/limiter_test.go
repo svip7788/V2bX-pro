@@ -255,6 +255,9 @@ func TestDeviceKeyMergesIPv4Prefix(t *testing.T) {
 	if _, reject := lim.CheckLimit(taguuid, "112.96.85.1", true, true); !reject {
 		t.Fatal("ipv4 in another /24 should count as a new device")
 	}
+	if got := lim.getOrCreateDeviceState(taguuid, 1).snapshotCurrent(); len(got) != 1 || got[0].IP != "112.96.84.206" {
+		t.Fatalf("should report latest raw ip, got %+v", got)
+	}
 
 	SetIPv4Prefix(32)
 	if got := deviceKey("1.2.3.4"); got != "1.2.3.4" {

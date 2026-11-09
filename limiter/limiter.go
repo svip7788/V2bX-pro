@@ -91,16 +91,17 @@ func (l *Limiter) UpdateSpeedShare(tag, uuid string, divisor int, expire time.Ti
 }
 
 type userDeviceState struct {
-	uid      int
-	mu       sync.Mutex
-	current  map[string]struct{}
-	reported map[string]struct{}
+	uid int
+	mu  sync.Mutex
+	// 设备计数键（deviceKey）=> 最近一次的原始 IP；上报原始 IP，面板按自己的口径归并并用于展示、查归属地
+	current  map[string]string
+	reported map[string]string
 }
 
 func newUserDeviceState(uid int) *userDeviceState {
 	return &userDeviceState{
 		uid:     uid,
-		current: make(map[string]struct{}),
+		current: make(map[string]string),
 	}
 }
 
@@ -108,33 +109,35 @@ func (s *userDeviceState) setUID(uid int) {
 	s.mu.Lock()
 	s.uid = uid
 	if s.current == nil {
-		s.current = make(map[string]struct{})
+		s.current = make(map[string]string)
 	}
 	s.mu.Unlock()
 }
 
-// allow 返回 true 表示拒绝。aliveIPs 非 nil 时是面板汇总的全节点在线 IP：
+// allow 返回 true 表示拒绝。key 为 deviceKey 归并后的计数键，raw 为原始 IP。
+// aliveIPs 非 nil 时是面板汇总的全节点在线 IP：
 // 已在其中的 IP 是同一设备换节点或多节点并用，直接放行；设备数按本节点与全节点 IP 的并集计。
 // aliveIPs 为 nil（只有 alivelist 计数）时只能取两者较大值。
-func (s *userDeviceState) allow(ip string, deviceLimit int, aliveCount int, aliveIPs []string) bool {
+func (s *userDeviceState) allow(key, raw string, deviceLimit int, aliveCount int, aliveIPs []string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.current == nil {
-		s.current = make(map[string]struct{})
+		s.current = make(map[string]string)
 	}
-	if _, exists := s.current[ip]; exists {
+	if _, exists := s.current[key]; exists {
+		s.current[key] = raw
 		return false
 	}
-	if _, exists := s.reported[ip]; exists {
-		delete(s.reported, ip)
-		s.current[ip] = struct{}{}
+	if _, exists := s.reported[key]; exists {
+		delete(s.reported, key)
+		s.current[key] = raw
 		return false
 	}
 	knownCount := len(s.current) + len(s.reported)
 	if aliveIPs != nil {
 		for _, g := range aliveIPs {
-			if g == ip {
-				s.current[ip] = struct{}{}
+			if g == key {
+				s.current[key] = raw
 				return false
 			}
 			_, inCurrent := s.current[g]
@@ -149,7 +152,7 @@ func (s *userDeviceState) allow(ip string, deviceLimit int, aliveCount int, aliv
 	if deviceLimit > 0 && knownCount >= deviceLimit {
 		return true
 	}
-	s.current[ip] = struct{}{}
+	s.current[key] = raw
 	return false
 }
 
@@ -160,10 +163,10 @@ func (s *userDeviceState) snapshotCurrent() []panel.OnlineUser {
 		return nil
 	}
 	users := make([]panel.OnlineUser, 0, len(s.current))
-	for ip := range s.current {
+	for _, raw := range s.current {
 		users = append(users, panel.OnlineUser{
 			UID: s.uid,
-			IP:  ip,
+			IP:  raw,
 		})
 	}
 	return users
@@ -179,7 +182,7 @@ func (s *userDeviceState) markReported() {
 		return
 	}
 	s.reported = s.current
-	s.current = make(map[string]struct{}, len(s.reported))
+	s.current = make(map[string]string, len(s.reported))
 }
 
 func AddLimiter(tag string, l *conf.LimitConfig, users []panel.UserInfo, aliveList map[int]int) *Limiter {
@@ -396,11 +399,11 @@ func (l *Limiter) TouchActiveDevices(tag string, active map[string][]string) {
 		state := l.getOrCreateDeviceState(format.UserTag(tag, uuid), uid)
 		state.mu.Lock()
 		if state.current == nil {
-			state.current = make(map[string]struct{}, len(ips))
+			state.current = make(map[string]string, len(ips))
 		}
 		for _, ip := range ips {
 			key := deviceKey(ip)
-			state.current[key] = struct{}{}
+			state.current[key] = ip
 			delete(state.reported, key)
 		}
 		state.mu.Unlock()
@@ -408,7 +411,7 @@ func (l *Limiter) TouchActiveDevices(tag string, active map[string][]string) {
 }
 
 func (l *Limiter) CheckLimit(taguuid string, ip string, isTcp bool, noSSUDP bool) (Bucket *ratelimit.Bucket, Reject bool) {
-	ip = deviceKey(ip)
+	key := deviceKey(ip)
 	if l.isBitTorrentBanned(taguuid) {
 		return nil, true
 	}
@@ -439,7 +442,7 @@ func (l *Limiter) CheckLimit(taguuid string, ip string, isTcp bool, noSSUDP bool
 	if noSSUDP {
 		aliveCount, aliveIPs := l.getAlive(uid)
 		state := l.getOrCreateDeviceState(taguuid, uid)
-		if state.allow(ip, deviceLimit, aliveCount, aliveIPs) {
+		if state.allow(key, ip, deviceLimit, aliveCount, aliveIPs) {
 			return nil, true
 		}
 	}
