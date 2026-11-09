@@ -35,6 +35,7 @@ func (c *Controller) reportUserTrafficTask() (err error) {
 
 	var aliveData map[int][]string
 	var onlineDeviceCount int
+	c.limiter.TouchActiveDevices(c.tag, c.server.ActiveUserIPs(c.tag))
 	if onlineDevice, err := c.limiter.GetOnlineDevice(); err != nil {
 		log.Print(err)
 	} else if len(onlineDevice) > 0 {

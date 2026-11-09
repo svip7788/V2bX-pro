@@ -2,8 +2,8 @@ package limiter
 
 import (
 	"errors"
+	"net/netip"
 	"regexp"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -356,8 +356,44 @@ func (l *Limiter) UpdateDynamicSpeedLimit(tag, uuid string, limit int, expire ti
 	return nil
 }
 
+// deviceKey 设备计数用的 IP 键：IPv6 临时地址会定期更换，同一 /64 视为同一设备
+func deviceKey(ip string) string {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return ip
+	}
+	addr = addr.Unmap()
+	if addr.Is4() {
+		return addr.String()
+	}
+	p, _ := addr.WithZone("").Prefix(64)
+	return p.String()
+}
+
+// TouchActiveDevices 把仍有活跃连接的 IP 记入本轮设备：设备只在建连时登记，
+// 长连接（mux、gRPC、QUIC 等）不再建新连接时，否则两轮后就从上报中消失、让出名额
+func (l *Limiter) TouchActiveDevices(tag string, active map[string][]string) {
+	for uuid, ips := range active {
+		uid, ok := l.GetUIDByUUID(uuid)
+		if !ok {
+			continue
+		}
+		state := l.getOrCreateDeviceState(format.UserTag(tag, uuid), uid)
+		state.mu.Lock()
+		if state.current == nil {
+			state.current = make(map[string]struct{}, len(ips))
+		}
+		for _, ip := range ips {
+			key := deviceKey(ip)
+			state.current[key] = struct{}{}
+			delete(state.reported, key)
+		}
+		state.mu.Unlock()
+	}
+}
+
 func (l *Limiter) CheckLimit(taguuid string, ip string, isTcp bool, noSSUDP bool) (Bucket *ratelimit.Bucket, Reject bool) {
-	ip = strings.TrimPrefix(ip, "::ffff:")
+	ip = deviceKey(ip)
 	if l.isBitTorrentBanned(taguuid) {
 		return nil, true
 	}
@@ -478,10 +514,32 @@ func (l *Limiter) MarkOnlineDeviceReported() {
 
 // SetAliveIPs 设置面板下发的全节点在线 IP（uid => ips），at 为收到时间
 func (l *Limiter) SetAliveIPs(devices map[int][]string, at time.Time) {
+	devices = normalizeAliveIPs(devices)
 	l.aliveMu.Lock()
 	l.aliveIPs = devices
 	l.aliveIPsAt = at
 	l.aliveMu.Unlock()
+}
+
+// normalizeAliveIPs 旧版节点上报的是原始 IPv6，按 deviceKey 归并去重后再比对
+func normalizeAliveIPs(devices map[int][]string) map[int][]string {
+	if devices == nil {
+		return nil
+	}
+	out := make(map[int][]string, len(devices))
+	for uid, ips := range devices {
+		keys := make([]string, 0, len(ips))
+		seen := make(map[string]struct{}, len(ips))
+		for _, ip := range ips {
+			k := deviceKey(ip)
+			if _, ok := seen[k]; !ok {
+				seen[k] = struct{}{}
+				keys = append(keys, k)
+			}
+		}
+		out[uid] = keys
+	}
+	return out
 }
 
 // getAlive 返回 alivelist 计数，以及未过期时的全节点在线 IP（用户不在线时为空切片而非 nil）

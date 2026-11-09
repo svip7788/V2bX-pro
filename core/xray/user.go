@@ -38,6 +38,20 @@ func (c *Xray) CloseUserConns(tag string, uuid string) int {
 	return 0
 }
 
+func (c *Xray) ActiveUserIPs(tag string) map[string][]string {
+	prefix := tag + "|"
+	out := make(map[string][]string)
+	c.dispatcher.LinkManagers.Range(func(key, value any) bool {
+		if uuid, ok := strings.CutPrefix(key.(string), prefix); ok {
+			if ips := value.(*dispatcher.LinkManager).IPs(); len(ips) > 0 {
+				out[uuid] = ips
+			}
+		}
+		return true
+	})
+	return out
+}
+
 func (c *Xray) DelUsers(users []panel.UserInfo, tag string, _ *panel.NodeInfo) error {
 	userManager, err := c.GetUserManager(tag)
 	if err != nil {

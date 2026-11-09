@@ -165,6 +165,14 @@ func (s *Selector) CloseUserConns(tag string, uuid string) int {
 	return t.(Core).CloseUserConns(tag, uuid)
 }
 
+func (s *Selector) ActiveUserIPs(tag string) map[string][]string {
+	t, e := s.nodes.Load(tag)
+	if !e {
+		return nil
+	}
+	return t.(Core).ActiveUserIPs(tag)
+}
+
 func (s *Selector) Protocols() []string {
 	protocols := make([]string, 0)
 	for i := range s.cores {

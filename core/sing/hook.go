@@ -85,7 +85,7 @@ func (h *HookServer) RoutedConnection(ctx context.Context, conn net.Conn, m adap
 		conn = counter.NewConnCounter(conn, s)
 		onClose = func() { liveClose(lc, s) }
 	}
-	conn = newTrackedConn(conn, h.getConnManager(taguuid), onClose)
+	conn = newTrackedConn(conn, h.getConnManager(taguuid), ip, onClose)
 	// Safety net: untrack and close when the per-connection context is
 	// cancelled, in case sing-box ends the connection without calling Close
 	// on our wrapper. Close is idempotent (guarded by sync.Once).

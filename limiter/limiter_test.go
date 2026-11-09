@@ -199,6 +199,55 @@ func TestUpdateUserLimitKeepsDynamicAndDevices(t *testing.T) {
 	}
 }
 
+func TestDeviceKeyMergesIPv6Prefix(t *testing.T) {
+	cases := map[string]string{
+		"1.2.3.4":                  "1.2.3.4",
+		"::ffff:1.2.3.4":           "1.2.3.4",
+		"2001:db8:1:2:aaaa::1":     "2001:db8:1:2::/64",
+		"2001:db8:1:2:bbbb::9%en0": "2001:db8:1:2::/64",
+		"bad":                      "bad",
+	}
+	for in, want := range cases {
+		if got := deviceKey(in); got != want {
+			t.Errorf("deviceKey(%q) = %q, want %q", in, got, want)
+		}
+	}
+
+	Init()
+	lim := AddLimiter("tag", &conf.LimitConfig{}, []panel.UserInfo{
+		{Id: 1, Uuid: "u1", DeviceLimit: 1},
+	}, map[int]int{})
+	taguuid := format.UserTag("tag", "u1")
+	if _, reject := lim.CheckLimit(taguuid, "2001:db8:1:2::1", true, true); reject {
+		t.Fatal("first ipv6 should pass")
+	}
+	if _, reject := lim.CheckLimit(taguuid, "2001:db8:1:2::2", true, true); reject {
+		t.Fatal("rotated ipv6 in same /64 is the same device")
+	}
+}
+
+func TestTouchActiveDevicesKeepsLongLivedConn(t *testing.T) {
+	Init()
+	lim := AddLimiter("tag", &conf.LimitConfig{}, []panel.UserInfo{
+		{Id: 1, Uuid: "u1", DeviceLimit: 1},
+	}, map[int]int{})
+	taguuid := format.UserTag("tag", "u1")
+	if _, reject := lim.CheckLimit(taguuid, "1.1.1.1", true, true); reject {
+		t.Fatal("first ip should pass")
+	}
+	for i := 0; i < 3; i++ {
+		lim.TouchActiveDevices("tag", map[string][]string{"u1": {"1.1.1.1"}})
+		online, _ := lim.GetOnlineDevice()
+		if len(online) != 1 || online[0].IP != "1.1.1.1" {
+			t.Fatalf("round %d: long-lived conn should stay reported, got %v", i, online)
+		}
+		lim.MarkOnlineDeviceReported()
+	}
+	if _, reject := lim.CheckLimit(taguuid, "2.2.2.2", true, true); !reject {
+		t.Fatal("slot held by long-lived conn should reject a new ip")
+	}
+}
+
 func TestBanBitTorrentRejectsUser(t *testing.T) {
 	Init()
 	lim := AddLimiter("tag", &conf.LimitConfig{}, []panel.UserInfo{

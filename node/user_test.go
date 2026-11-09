@@ -42,6 +42,8 @@ func (f *fakeCore) DelUsers([]panel.UserInfo, string, *panel.NodeInfo) error { r
 
 func (f *fakeCore) CloseUserConns(string, string) int { return 0 }
 
+func (f *fakeCore) ActiveUserIPs(string) map[string][]string { return nil }
+
 func (f *fakeCore) Protocols() []string { return nil }
 
 func (f *fakeCore) Type() string { return "fake" }

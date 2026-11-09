@@ -254,6 +254,20 @@ func (b *Sing) CloseUserConns(tag string, uuid string) int {
 	return 0
 }
 
+func (b *Sing) ActiveUserIPs(tag string) map[string][]string {
+	prefix := tag + "|"
+	out := make(map[string][]string)
+	b.hookServer.connManagers.Range(func(key, value any) bool {
+		if uuid, ok := strings.CutPrefix(key.(string), prefix); ok {
+			if ips := value.(*userConnManager).IPs(); len(ips) > 0 {
+				out[uuid] = ips
+			}
+		}
+		return true
+	})
+	return out
+}
+
 type UserDeleter interface {
 	DelUsers(uuid []string) error
 }

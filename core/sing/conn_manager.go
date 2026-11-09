@@ -14,21 +14,39 @@ type managedCloser interface {
 
 type userConnManager struct {
 	mu    sync.Mutex
-	conns map[managedCloser]struct{}
+	conns map[managedCloser]string // 值为做过设备数检查的来源 IP，其余为空
 	key   string
 	owner *sync.Map
 }
 
-func (m *userConnManager) Add(conn managedCloser) {
+func (m *userConnManager) Add(conn managedCloser, ip string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.owner != nil && m.key != "" {
 		m.owner.Store(m.key, m)
 	}
 	if m.conns == nil {
-		m.conns = make(map[managedCloser]struct{})
+		m.conns = make(map[managedCloser]string)
 	}
-	m.conns[conn] = struct{}{}
+	m.conns[conn] = ip
+}
+
+// IPs 返回活跃连接的来源 IP（去重）
+func (m *userConnManager) IPs() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var ips []string
+	seen := make(map[string]struct{}, 1)
+	for _, ip := range m.conns {
+		if ip == "" {
+			continue
+		}
+		if _, ok := seen[ip]; !ok {
+			seen[ip] = struct{}{}
+			ips = append(ips, ip)
+		}
+	}
+	return ips
 }
 
 func (m *userConnManager) Remove(conn managedCloser) {
@@ -54,7 +72,7 @@ func (m *userConnManager) CloseAll() int {
 	for conn := range m.conns {
 		snapshot = append(snapshot, conn)
 	}
-	m.conns = make(map[managedCloser]struct{})
+	m.conns = make(map[managedCloser]string)
 	m.mu.Unlock()
 	for _, conn := range snapshot {
 		_ = conn.Close()
@@ -69,7 +87,7 @@ type trackedConn struct {
 	onClose func()
 }
 
-func newTrackedConn(conn net.Conn, manager *userConnManager, onClose func()) net.Conn {
+func newTrackedConn(conn net.Conn, manager *userConnManager, ip string, onClose func()) net.Conn {
 	extended, ok := conn.(N.ExtendedConn)
 	if !ok {
 		extended = bufio.NewExtendedConn(conn)
@@ -79,7 +97,7 @@ func newTrackedConn(conn net.Conn, manager *userConnManager, onClose func()) net
 		manager:      manager,
 		onClose:      onClose,
 	}
-	manager.Add(tracked)
+	manager.Add(tracked, ip)
 	return tracked
 }
 
@@ -107,7 +125,7 @@ func newTrackedPacketConn(conn N.PacketConn, manager *userConnManager, onClose f
 		manager:    manager,
 		onClose:    onClose,
 	}
-	manager.Add(tracked)
+	manager.Add(tracked, "")
 	return tracked
 }
 
