@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"io"
+	gonet "net"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,6 +17,7 @@ import (
 	xnet "github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/protocol"
 	sessionctx "github.com/xtls/xray-core/common/session"
+	"github.com/xtls/xray-core/common/signal"
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/features/policy"
 	"github.com/xtls/xray-core/features/routing"
@@ -37,6 +40,7 @@ type Server struct {
 	closeOnce      sync.Once
 	debounce       time.Duration
 	paddingScheme  string
+	fallbackDest   string
 }
 
 func NewServer(ctx context.Context, config *ServerConfig) (*Server, error) {
@@ -49,6 +53,9 @@ func NewServer(ctx context.Context, config *ServerConfig) (*Server, error) {
 		pendingAdds:    make(map[string]*protocol.MemoryUser),
 		pendingRemoves: make(map[string]struct{}),
 		paddingScheme:  config.PaddingScheme,
+	}
+	if config.FallbackAddr != "" && config.FallbackPort != 0 {
+		s.fallbackDest = gonet.JoinHostPort(config.FallbackAddr, strconv.Itoa(int(config.FallbackPort)))
 	}
 	users := make(map[[32]byte]*protocol.MemoryUser)
 	emailIndex := make(map[string][32]byte)
@@ -100,7 +107,11 @@ func (s *Server) Process(ctx context.Context, network xnet.Network, conn stat.Co
 
 	// auth header: 32B sha256(password) + 2B padlen
 	var h [34]byte
-	if _, err := io.ReadFull(sess.br, h[:]); err != nil {
+	if n, err := io.ReadFull(sess.br, h[:]); err != nil {
+		// 不足 34 字节的探测请求（如短 HTTP 请求）也交给回落站点处理
+		if n > 0 && s.fallbackDest != "" {
+			return s.fallback(ctx, conn, sess.br, h[:n], sessPol.Timeouts.ConnectionIdle)
+		}
 		return errors.New("anytls: read auth").Base(err)
 	}
 
@@ -111,6 +122,9 @@ func (s *Server) Process(ctx context.Context, network xnet.Network, conn stat.Co
 	if user == nil {
 		authErr := errors.New("anytls: invalid user")
 		log.Record(&log.AccessMessage{From: conn.RemoteAddr(), Status: log.AccessRejected, Reason: authErr})
+		if s.fallbackDest != "" {
+			return s.fallback(ctx, conn, sess.br, h[:], sessPol.Timeouts.ConnectionIdle)
+		}
 		return authErr
 	}
 
@@ -141,4 +155,36 @@ func (s *Server) Process(ctx context.Context, network xnet.Network, conn stat.Co
 	go sess.watchServerIdle(ctx, idleStop)
 
 	return sess.readLoop(ctx)
+}
+
+// fallback 把认证失败的连接（含已读出的字节）原样转发到回落地址，让探测方看到正常网站
+func (s *Server) fallback(ctx context.Context, conn stat.Connection, reader *buf.BufferedReader, head []byte, idle time.Duration) error {
+	_ = conn.SetReadDeadline(time.Time{})
+	fb, err := gonet.DialTimeout("tcp", s.fallbackDest, 5*time.Second)
+	if err != nil {
+		return errors.New("anytls: fallback dial ", s.fallbackDest).Base(err)
+	}
+	defer fb.Close()
+	if _, err := fb.Write(head); err != nil {
+		return errors.New("anytls: fallback write").Base(err)
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	timer := signal.CancelAfterInactivity(ctx, cancel, idle)
+	go func() {
+		<-ctx.Done()
+		_ = fb.Close()
+		_ = conn.Close()
+	}()
+	go func() {
+		_ = buf.Copy(reader, buf.NewWriter(fb), buf.UpdateActivity(timer))
+		if tc, ok := fb.(*gonet.TCPConn); ok {
+			_ = tc.CloseWrite()
+		}
+	}()
+	if err := buf.Copy(buf.NewReader(fb), buf.NewWriter(conn), buf.UpdateActivity(timer)); err != nil {
+		return errors.New("anytls: fallback relay").Base(err)
+	}
+	return nil
 }

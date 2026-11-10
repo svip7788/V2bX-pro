@@ -22,11 +22,18 @@ type AnyTLSServerConfig struct {
 	Users []*AnyTLSUser `json:"users"`
 	// Easier authoring: accept padding scheme as lines and join internally
 	PaddingScheme []string `json:"paddingScheme"`
+	FallbackAddr  string   `json:"fallbackAddr"`
+	FallbackPort  uint32   `json:"fallbackPort"`
 }
 
 func (c *AnyTLSServerConfig) Build() (proto.Message, error) {
+	if (c.FallbackAddr == "") != (c.FallbackPort == 0) || c.FallbackPort > 65535 {
+		return nil, errors.New("ANYTLS: fallbackAddr and fallbackPort (1-65535) must be set together")
+	}
 	cfg := &anytls.ServerConfig{
-		Users: make([]*protocol.User, 0, len(c.Users)),
+		Users:        make([]*protocol.User, 0, len(c.Users)),
+		FallbackAddr: c.FallbackAddr,
+		FallbackPort: c.FallbackPort,
 	}
 	if len(c.PaddingScheme) > 0 {
 		cfg.PaddingScheme = strings.Join(c.PaddingScheme, "\n")

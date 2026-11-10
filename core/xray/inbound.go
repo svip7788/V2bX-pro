@@ -98,7 +98,7 @@ func buildInbound(option *conf.Options, nodeInfo *panel.NodeInfo, tag string) (*
 	in.ListenOn = &coreConf.Address{Address: ipAddress}
 	// Set SniffingConfig
 	sniffingConfig := &coreConf.SniffingConfig{
-		Enabled:      true,
+		Enabled: true,
 		// quic：HTTP/3 流量也按域名匹配路由组（如 Gemini 走转发）
 		DestOverride: coreConf.StringList{"http", "tls", "quic"},
 	}
@@ -174,6 +174,10 @@ func buildInbound(option *conf.Options, nodeInfo *panel.NodeInfo, tag string) (*
 			if nodeInfo.Type == "hysteria" || nodeInfo.Type == "hysteria2" || nodeInfo.Type == "tuic" {
 				alpnList := &coreConf.StringList{"h3"}
 				tlsCfg.ALPN = alpnList
+			}
+			// 回落站点只能处理明文 HTTP/1.1，协商成 h2 时探测方的请求它接不住
+			if nodeInfo.Type == "anytls" && nodeInfo.AnyTls.HasFallback() {
+				tlsCfg.ALPN = &coreConf.StringList{"http/1.1"}
 			}
 			in.StreamSetting.TLSSettings = tlsCfg
 		}
@@ -539,6 +543,10 @@ func buildAnyTLS(nodeInfo *panel.NodeInfo, inbound *coreConf.InboundDetourConfig
 	v := nodeInfo.AnyTls
 	settings := &coreConf.AnyTLSServerConfig{
 		PaddingScheme: v.PaddingScheme,
+	}
+	if v.HasFallback() {
+		settings.FallbackAddr = v.FallbackAddr
+		settings.FallbackPort = uint32(v.FallbackPort)
 	}
 	network := v.Network
 	if network == "" {

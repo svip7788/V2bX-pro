@@ -18,6 +18,9 @@ message ServerConfig {
   repeated xray.common.protocol.User users = 1;
   // optional server padding scheme string
   string padding_scheme = 2;
+  // 认证失败时把连接原样转发到该地址（通常是本机 HTTP/1.1 网站），为空则直接断开
+  string fallback_addr = 3;
+  uint32 fallback_port = 4;
 }
 
 message ClientConfig {

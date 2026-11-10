@@ -174,6 +174,13 @@ type AnyTlsNode struct {
 	Network         string          `json:"network"`
 	NetworkSettings json.RawMessage `json:"networkSettings"`
 	PaddingScheme   []string        `json:"padding_scheme,omitempty"`
+	FallbackAddr    string          `json:"fallback_addr,omitempty"`
+	FallbackPort    int             `json:"fallback_port,omitempty"`
+}
+
+// HasFallback 地址和端口都有效时才开启回落
+func (n *AnyTlsNode) HasFallback() bool {
+	return n != nil && n.FallbackAddr != "" && n.FallbackPort > 0 && n.FallbackPort <= 65535
 }
 
 type HysteriaNode struct {

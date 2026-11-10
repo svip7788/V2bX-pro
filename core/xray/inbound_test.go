@@ -1,9 +1,12 @@
 package xray
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/InazumaV/V2bX/api/panel"
+	coreConf "github.com/xtls/xray-core/infra/conf"
+	"github.com/xtls/xray-core/proxy/anytls"
 )
 
 func TestResolveVLESSDecryptionPrefersPanelDecryption(t *testing.T) {
@@ -65,5 +68,37 @@ func TestResolveVLESSDecryptionRejectsUnsupportedMethod(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for unsupported decryption method")
+	}
+}
+
+func TestBuildAnyTLSFallback(t *testing.T) {
+	info := &panel.NodeInfo{AnyTls: &panel.AnyTlsNode{FallbackAddr: "127.0.0.1", FallbackPort: 80}}
+	in := &coreConf.InboundDetourConfig{}
+	if err := buildAnyTLS(info, in); err != nil {
+		t.Fatal(err)
+	}
+	var s coreConf.AnyTLSServerConfig
+	if err := json.Unmarshal(*in.Settings, &s); err != nil {
+		t.Fatal(err)
+	}
+	msg, err := s.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := msg.(*anytls.ServerConfig); c.FallbackAddr != "127.0.0.1" || c.FallbackPort != 80 {
+		t.Fatalf("fallback not applied: %+v", c)
+	}
+
+	info.AnyTls.FallbackPort = 0
+	in = &coreConf.InboundDetourConfig{}
+	if err := buildAnyTLS(info, in); err != nil {
+		t.Fatal(err)
+	}
+	s = coreConf.AnyTLSServerConfig{}
+	if err := json.Unmarshal(*in.Settings, &s); err != nil {
+		t.Fatal(err)
+	}
+	if s.FallbackAddr != "" || s.FallbackPort != 0 {
+		t.Fatalf("incomplete fallback should be ignored: %+v", s)
 	}
 }
