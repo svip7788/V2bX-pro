@@ -175,7 +175,7 @@ func (s *session) handleNewStream(ctx context.Context, st *stream, body buf.Mult
 
 	if dest.Address.String() == "sp.v2.udp-over-tcp.arpa" {
 		st.isUDP = true
-		if err := s.sendFrame(newFrame(cmdSYNACK, st.sid)); err != nil {
+		if err := s.sendSYNACK(st.sid, ""); err != nil {
 			errors.LogWarning(ctx, "anytls: UDP SYNACK send error, streamId=", st.sid, " err=", err)
 			return err
 		}
@@ -201,12 +201,13 @@ func (s *session) handleNewStream(ctx context.Context, st *stream, body buf.Mult
 
 	l, err := s.dispatcher.Dispatch(dispatchCtx, dest)
 	if err != nil {
+		buf.ReleaseMulti(body)
 		errors.LogWarning(ctx, "anytls: new stream dispatcher error, streamId=", st.sid, " err=", err)
-		return nil
+		return s.rejectStream(st.sid, err.Error())
 	}
 	st.link = l
 
-	if err := s.sendFrame(newFrame(cmdSYNACK, st.sid)); err != nil {
+	if err := s.sendSYNACK(st.sid, ""); err != nil {
 		errors.LogWarning(ctx, "anytls: new stream SYNACK send error, streamId=", st.sid, " err=", err)
 		return err
 	}
@@ -318,6 +319,30 @@ func (s *session) writeUoTPacket(ctx context.Context, st *stream, addr M.Socksad
 	}
 	b.UDP = &dest
 	return st.link.Writer.WriteMultiBuffer(buf.MultiBuffer{b})
+}
+
+// sendSYNACK 仅对 v2+ 客户端发送：v1 客户端不认识 cmdSYNACK，带 data 时会读错帧边界
+func (s *session) sendSYNACK(sid uint32, errText string) error {
+	if s.peerVersion < 2 {
+		return nil
+	}
+	f := newFrame(cmdSYNACK, sid)
+	if errText != "" {
+		f.data = []byte(errText)
+	}
+	return s.sendFrame(f)
+}
+
+// rejectStream v2 客户端回带错误的 SYNACK，v1 客户端回 FIN，避免客户端干等超时
+func (s *session) rejectStream(sid uint32, reason string) error {
+	var err error
+	if s.peerVersion >= 2 {
+		err = s.sendSYNACK(sid, reason)
+	} else {
+		err = s.sendFrame(newFrame(cmdFIN, sid))
+	}
+	s.finishStream(sid, nil)
+	return err
 }
 
 func (s *session) rejectUDPStream(ctx context.Context, st *stream, err error) error {
@@ -564,10 +589,12 @@ func (s *session) readLoop(ctx context.Context) error {
 					}
 				}
 			}
-			if err := s.sendFrame(&frame{cmd: cmdServerSettings, sid: 0, data: []byte("v=2")}); err != nil {
-				return err
+			if s.peerVersion >= 2 {
+				if err := s.sendFrame(&frame{cmd: cmdServerSettings, sid: 0, data: []byte("v=2")}); err != nil {
+					return err
+				}
 			}
-			if s.server != nil && s.server.paddingScheme != "" && s.clientPaddingMD5 != "" {
+			if s.server != nil && s.server.paddingScheme != "" {
 				sum := md5.Sum([]byte(s.server.paddingScheme))
 				if strings.ToLower(hex.EncodeToString(sum[:])) != s.clientPaddingMD5 {
 					if err := s.sendFrame(&frame{cmd: cmdUpdatePaddingScheme, sid: 0, data: []byte(s.server.paddingScheme)}); err != nil {
@@ -611,7 +638,7 @@ func (s *session) readLoop(ctx context.Context) error {
 						return err
 					}
 					errors.LogWarning(ctx, "anytls: unexpected data in SYN, streamId=", sid)
-					if err := s.sendFrame(&frame{cmd: cmdSYNACK, sid: sid, data: []byte("unexpected syn body")}); err != nil {
+					if err := s.sendSYNACK(sid, "unexpected syn body"); err != nil {
 						return err
 					}
 					continue
