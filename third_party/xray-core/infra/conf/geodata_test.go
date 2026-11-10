@@ -1,6 +1,7 @@
 package conf_test
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -8,8 +9,19 @@ import (
 	. "github.com/xtls/xray-core/infra/conf"
 )
 
+// setupGeodataAssets 用临时目录放空占位文件，Build 只校验文件存在，不依赖下载的 geoip.dat
+func setupGeodataAssets(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"geoip.dat", "geosite.dat"} {
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("xray.location.asset", dir)
+}
+
 func TestGeodataConfig(t *testing.T) {
-	t.Setenv("xray.location.asset", filepath.Join("..", "..", "resources"))
+	setupGeodataAssets(t)
 
 	creator := func() Buildable {
 		return new(GeodataConfig)
@@ -39,7 +51,7 @@ func TestGeodataConfig(t *testing.T) {
 }
 
 func TestGeodataAssetConfig(t *testing.T) {
-	t.Setenv("xray.location.asset", filepath.Join("..", "..", "resources"))
+	setupGeodataAssets(t)
 
 	if _, err := (&GeodataAssetConfig{
 		URL:  "https://example.com/geoip.dat",
@@ -57,7 +69,7 @@ func TestGeodataAssetConfig(t *testing.T) {
 }
 
 func TestGeodataAssetConfigInvalidURL(t *testing.T) {
-	t.Setenv("xray.location.asset", filepath.Join("..", "..", "resources"))
+	setupGeodataAssets(t)
 
 	for _, rawURL := range []string{
 		"",
