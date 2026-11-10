@@ -14,7 +14,7 @@
 * 节点端口级、用户级限速，动态限速（按时间段、速率阈值触发）
 * 面板驱动证书配置，QUIC 类协议无证书时自动自签
 * BT 封禁、SSH 防护、IP 监控、实时日志、路由转发组
-* AnyTLS 服务端按 anytls-go 协议版本 2 对齐，兼容 v1 客户端
+* AnyTLS 服务端按 anytls-go 协议版本 2 对齐，兼容 v1 客户端；支持回落（面板节点配置回落地址），认证失败的连接转发到伪装站点
 * 高并发优化，万级用户无锁竞争
 
 ## 说明
@@ -29,6 +29,16 @@
 ```bash
 wget -N https://raw.githubusercontent.com/svip7788/V2bX-pro/dev_new/install/install.sh && bash install.sh
 ```
+
+### AnyTLS 回落站点
+
+在节点上一键搭建只监听本机的 Nginx 伪装站点（默认 `127.0.0.1:8080`，可传端口参数；`uninstall` 卸载）：
+
+```bash
+bash <(curl -Ls https://raw.githubusercontent.com/svip7788/V2bX-pro/dev_new/install/fallback_site.sh)
+```
+
+然后在面板 AnyTLS 节点的「回落」里填写 `127.0.0.1` 和对应端口。
 
 ### 手动安装
 
