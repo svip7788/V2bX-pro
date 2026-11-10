@@ -29,6 +29,11 @@ func reportViolation(in *session.Inbound, l *limiter.Limiter, kind, target, deta
 	violation.Report(in.Tag, violation.Item{UID: userUID(in, l), Kind: kind, Target: target, Detail: detail})
 }
 
+// reportConnLimited 并发连接数超限被拒时上报面板记录
+func reportConnLimited(in *session.Inbound, l *limiter.Limiter, limit int) {
+	reportViolation(in, l, violation.KindConn, "上限 "+strconv.Itoa(limit), "并发连接数达到上限，新连接被拒绝")
+}
+
 // sshRejected 用户被识别为 SSH 爆破/扫描时拒绝其 22 端口连接，严重时上报
 func sshRejected(in *session.Inbound, l *limiter.Limiter, dest net.Destination, host string) bool {
 	if dest.Network != net.Network_TCP || dest.Port != sshguard.Port || in.User == nil {

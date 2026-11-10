@@ -221,8 +221,9 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, network net.Network) (*
 			manager: lm,
 		}
 		ip, counted := deviceIP(sessionInbound)
-		if !lm.AddLink(managedWriter, outboundLink.Reader, sessionInbound.Conn, ip, counted, limit.UserConnLimit(user.Email)) {
+		if connLimit := limit.UserConnLimit(user.Email); !lm.AddLink(managedWriter, outboundLink.Reader, sessionInbound.Conn, ip, counted, connLimit) {
 			errors.LogInfo(ctx, "Limited ", user.Email, " by conn count")
+			reportConnLimited(sessionInbound, limit, connLimit)
 			common.Close(outboundLink.Writer)
 			common.Close(inboundLink.Writer)
 			common.Interrupt(outboundLink.Reader)
@@ -418,8 +419,9 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 			Counter: &ts.UpCounter,
 		}
 		ip, counted := deviceIP(sessionInbound)
-		if !lm.AddLink(managedWriter, outbound.Reader, sessionInbound.Conn, ip, counted, limit.UserConnLimit(user.Email)) {
+		if connLimit := limit.UserConnLimit(user.Email); !lm.AddLink(managedWriter, outbound.Reader, sessionInbound.Conn, ip, counted, connLimit) {
 			errors.LogInfo(ctx, "Limited ", user.Email, " by conn count")
+			reportConnLimited(sessionInbound, limit, connLimit)
 			common.Close(outbound.Writer)
 			common.Interrupt(outbound.Reader)
 			return errors.New("Limited ", user.Email, " by conn count")
