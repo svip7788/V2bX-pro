@@ -36,13 +36,7 @@ func runMachineServer(c *conf.Conf) error {
 	}
 
 	limiter.Init()
-	cores := conf.MachinesCoreConfigs(machines, c.CoresConfig)
-	coreTypes := make([]string, 0, len(cores))
-	for _, cc := range cores {
-		coreTypes = append(coreTypes, strings.ToLower(cc.Type))
-	}
-
-	vc, err := vCore.NewCore(cores)
+	vc, err := vCore.NewCore(conf.MachineCoreConfigs(c.CoresConfig))
 	if err != nil {
 		return fmt.Errorf("new core failed: %w", err)
 	}
@@ -63,7 +57,7 @@ func runMachineServer(c *conf.Conf) error {
 		}
 	}()
 	for _, mc := range machines {
-		m, err := machine.NewManager(mc, vc, coreTypes, version)
+		m, err := machine.NewManager(mc, vc, version)
 		if err != nil {
 			return err
 		}

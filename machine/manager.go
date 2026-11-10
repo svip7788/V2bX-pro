@@ -30,11 +30,10 @@ type runningNode struct {
 
 // Manager 机器模式：按面板下发的节点列表增量启停节点，共用一条 WS 连接
 type Manager struct {
-	cfg       *conf.MachineConfig
-	core      vCore.Core
-	coreTypes []string
-	client    *panel.MachineClient
-	version   string
+	cfg     *conf.MachineConfig
+	core    vCore.Core
+	client  *panel.MachineClient
+	version string
 
 	wsMu sync.RWMutex
 	ws   *panel.WSClient
@@ -58,22 +57,21 @@ type Manager struct {
 	wg       sync.WaitGroup
 }
 
-func NewManager(cfg *conf.MachineConfig, core vCore.Core, coreTypes []string, version string) (*Manager, error) {
+func NewManager(cfg *conf.MachineConfig, core vCore.Core, version string) (*Manager, error) {
 	client, err := panel.NewMachineClient(cfg)
 	if err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m := &Manager{
-		cfg:       cfg,
-		core:      core,
-		coreTypes: coreTypes,
-		client:    client,
-		version:   version,
-		nodes:     make(map[int]*runningNode),
-		syncCh:    make(chan struct{}, 1),
-		ctx:       ctx,
-		cancel:    cancel,
+		cfg:     cfg,
+		core:    core,
+		client:  client,
+		version: version,
+		nodes:   make(map[int]*runningNode),
+		syncCh:  make(chan struct{}, 1),
+		ctx:     ctx,
+		cancel:  cancel,
 	}
 	m.pullInterval.Store(int64(defaultPullInterval))
 	m.commands = newCommandRunner(m)
@@ -292,8 +290,7 @@ func (m *Manager) syncNodes(nodes []panel.MachineNode) {
 
 func (m *Manager) startNode(id int, d desiredNode) error {
 	nodeType := d.nodeType
-	coreType := m.cfg.CoreTypeFor(nodeType, m.coreTypes)
-	nc, err := m.cfg.NodeConfig(id, nodeType, coreType)
+	nc, err := m.cfg.NodeConfig(id, nodeType)
 	if err != nil {
 		return err
 	}
@@ -313,7 +310,7 @@ func (m *Manager) startNode(id int, d desiredNode) error {
 	m.mu.Lock()
 	m.nodes[id] = &runningNode{key: nodeKey(id, d), ctrl: ctrl}
 	m.mu.Unlock()
-	log.WithFields(log.Fields{"node_id": id, "type": nodeType, "core": coreType, "proxy_protocol": d.proxyProtocol}).Info("Node started")
+	log.WithFields(log.Fields{"node_id": id, "type": nodeType, "proxy_protocol": d.proxyProtocol}).Info("Node started")
 	return nil
 }
 

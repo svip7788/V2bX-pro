@@ -17,7 +17,7 @@ type MachineConfig struct {
 	APISendIP string `json:"ApiSendIP,omitempty"`
 	MachineID int    `json:"MachineID"`
 	Token     string `json:"Token"`
-	// auto | sing | xray
+	// 已废弃：内核固定为 xray，保留字段以兼容旧配置
 	Core    string `json:"Core,omitempty"`
 	Timeout int    `json:"Timeout,omitempty"`
 	// 覆盖每个节点的默认 Options，字段与 Nodes 单项相同
@@ -51,27 +51,19 @@ func (m *MachineConfig) panelSlug() string {
 	return b.String()
 }
 
-// auto 模式下优先 sing 的协议（QUIC 系）；AnyTLS 两个内核都支持，auto 下走 xray
-var singPreferredTypes = map[string]struct{}{
-	"hysteria":  {},
-	"hysteria2": {},
-	"tuic":      {},
-}
-
 // 必须带 TLS 证书的协议，未配置证书时用自签
 var selfCertTypes = map[string]struct{}{
-	"hysteria":  {},
 	"hysteria2": {},
 	"tuic":      {},
 	"anytls":    {},
 }
 
+// hysteria v1 不在列表中：xray 只支持 Hysteria2，面板下发的 v1 节点会被跳过
 var machineNodeTypes = map[string]struct{}{
 	"vmess":       {},
 	"vless":       {},
 	"trojan":      {},
 	"shadowsocks": {},
-	"hysteria":    {},
 	"hysteria2":   {},
 	"tuic":        {},
 	"anytls":      {},
@@ -89,68 +81,12 @@ func NormalizeMachineNodeType(t string) string {
 	return t
 }
 
-func (m *MachineConfig) coreMode() string {
-	switch strings.ToLower(strings.TrimSpace(m.Core)) {
-	case "sing":
-		return "sing"
-	case "xray":
-		return "xray"
-	default:
-		return "auto"
-	}
-}
-
-// CoreTypeFor 按 Core 策略为节点类型选择内核，available 为实际可用的内核类型
-func (m *MachineConfig) CoreTypeFor(nodeType string, available []string) string {
-	preferred := "xray"
-	_, singPreferred := singPreferredTypes[nodeType]
-	switch m.coreMode() {
-	case "sing":
-		preferred = "sing"
-	case "auto":
-		if singPreferred {
-			preferred = "sing"
-		}
-	}
-	has := func(t string) bool {
-		for _, a := range available {
-			if strings.EqualFold(a, t) {
-				return true
-			}
-		}
-		return false
-	}
-	if has(preferred) || len(available) == 0 {
-		return preferred
-	}
-	if preferred == "xray" {
-		return "sing"
-	}
-	return "xray"
-}
-
-// CoreConfigs 已手写 Cores 时原样使用，否则按 Core 策略生成默认内核配置
-func (m *MachineConfig) CoreConfigs(existing []CoreConfig) []CoreConfig {
-	return MachinesCoreConfigs([]*MachineConfig{m}, existing)
-}
-
-// MachinesCoreConfigs 多站共用内核：任一站需要 xray 就一并启动
-func MachinesCoreConfigs(machines []*MachineConfig, existing []CoreConfig) []CoreConfig {
+// MachineCoreConfigs 已手写 Cores 时原样使用，否则生成默认 xray 内核配置；多站共用同一个内核
+func MachineCoreConfigs(existing []CoreConfig) []CoreConfig {
 	if len(existing) > 0 {
 		return existing
 	}
-	needXray := false
-	for _, m := range machines {
-		if m.coreMode() != "sing" {
-			needXray = true
-		}
-	}
-	cores := make([]CoreConfig, 0, 2)
-	if needXray {
-		cores = append(cores, CoreConfig{Type: "xray", XrayConfig: defaultMachineXrayConfig()})
-	}
-	cores = append(cores, CoreConfig{Type: "sing", SingConfig: defaultMachineSingConfig()})
-	return cores
+	return []CoreConfig{{Type: "xray", XrayConfig: defaultMachineXrayConfig()}}
 }
 
 func defaultMachineXrayConfig() *XrayConfig {
@@ -167,12 +103,6 @@ func defaultMachineXrayConfig() *XrayConfig {
 	return x
 }
 
-func defaultMachineSingConfig() *SingConfig {
-	s := NewSingConfig()
-	s.OriginalPath = machineAsset("sing_origin.json")
-	return s
-}
-
 func machineAsset(name string) string {
 	p := filepath.Join(MachineAssetDir, name)
 	info, err := os.Stat(p)
@@ -183,7 +113,7 @@ func machineAsset(name string) string {
 }
 
 // NodeConfig 生成单个面板节点的运行配置
-func (m *MachineConfig) NodeConfig(nodeID int, nodeType string, coreType string) (NodeConfig, error) {
+func (m *MachineConfig) NodeConfig(nodeID int, nodeType string) (NodeConfig, error) {
 	timeout := m.Timeout
 	if timeout <= 0 {
 		timeout = 30
@@ -199,7 +129,7 @@ func (m *MachineConfig) NodeConfig(nodeID int, nodeType string, coreType string)
 	}
 	nc.ApiConfig.SetNodeIDs([]int{nodeID})
 
-	opts, err := m.nodeOptionsJSON(nodeID, nodeType, coreType)
+	opts, err := m.nodeOptionsJSON(nodeID, nodeType)
 	if err != nil {
 		return NodeConfig{}, err
 	}
@@ -214,19 +144,15 @@ func (m *MachineConfig) NodeConfig(nodeID int, nodeType string, coreType string)
 	return nc, nil
 }
 
-func (m *MachineConfig) nodeOptionsJSON(nodeID int, nodeType, coreType string) ([]byte, error) {
+func (m *MachineConfig) nodeOptionsJSON(nodeID int, nodeType string) ([]byte, error) {
 	_, needCert := selfCertTypes[nodeType]
-	listenIP := "0.0.0.0"
-	if coreType == "sing" {
-		listenIP = "::"
-	}
 	certMode := "none"
 	if needCert {
 		certMode = "self"
 	}
 	opts := map[string]any{
-		"Core":                   coreType,
-		"ListenIP":               listenIP,
+		"Core":                   "xray",
+		"ListenIP":               "0.0.0.0",
 		"SendIP":                 "0.0.0.0",
 		"DeviceOnlineMinTraffic": 200,
 		"CertConfig": map[string]any{
@@ -235,13 +161,6 @@ func (m *MachineConfig) nodeOptionsJSON(nodeID int, nodeType, coreType string) (
 			"CertFile":   fmt.Sprintf("%scert/%snode%d.crt", MachineAssetDir, m.certPrefix, nodeID),
 			"KeyFile":    fmt.Sprintf("%scert/%snode%d.key", MachineAssetDir, m.certPrefix, nodeID),
 		},
-	}
-	if coreType == "sing" {
-		opts["EnableSniff"] = true
-		opts["SniffOverrideDestination"] = true
-		if needCert {
-			opts["EnableTFO"] = false
-		}
 	}
 	if len(m.NodeDefaults) > 0 {
 		var overrides map[string]any
@@ -261,7 +180,7 @@ func (m *MachineConfig) nodeOptionsJSON(nodeID int, nodeType, coreType string) (
 			}
 			opts[k] = v
 		}
-		opts["Core"] = coreType
+		opts["Core"] = "xray"
 	}
 	return json.Marshal(opts)
 }

@@ -26,11 +26,6 @@ var machineSetCommand = cobra.Command{
 	Short: "Add or update a panel machine; other panels are kept",
 	Args:  cobra.NoArgs,
 	RunE: func(_ *cobra.Command, _ []string) error {
-		switch machineCore {
-		case "", "auto", "sing", "xray":
-		default:
-			return fmt.Errorf("--core 只能是 auto/sing/xray")
-		}
 		token := machineToken
 		if token == "" {
 			token = os.Getenv("V2BX_MACHINE_TOKEN")
@@ -39,7 +34,6 @@ var machineSetCommand = cobra.Command{
 			APIHost:   machinePanel,
 			MachineID: machineID,
 			Token:     token,
-			Core:      machineCore,
 			Timeout:   30,
 		})
 		if err != nil {
@@ -73,7 +67,8 @@ func init() {
 	_ = machineCommand.MarkPersistentFlagRequired("panel")
 	machineSetCommand.Flags().IntVar(&machineID, "machine-id", 0, "machine id")
 	machineSetCommand.Flags().StringVar(&machineToken, "token", "", "machine token (or env V2BX_MACHINE_TOKEN)")
-	machineSetCommand.Flags().StringVar(&machineCore, "core", "auto", "auto|sing|xray")
+	machineSetCommand.Flags().StringVar(&machineCore, "core", "", "deprecated, xray is always used")
+	_ = machineSetCommand.Flags().MarkDeprecated("core", "内核固定为 xray，该参数已忽略")
 	machineCommand.AddCommand(&machineSetCommand, &machineRemoveCommand)
 	command.AddCommand(&machineCommand)
 }

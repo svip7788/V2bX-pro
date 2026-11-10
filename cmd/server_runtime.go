@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -318,10 +317,7 @@ func runChildGroupServer(c *conf.Conf, configPath string, groupID int) error {
 		return err
 	}
 	c.NodeConfig = selectedGroup.Nodes
-	c.CoresConfig, err = prepareChildCoreConfigs(c.CoresConfig, selectedGroup.Nodes[0], groupID)
-	if err != nil {
-		return err
-	}
+	c.CoresConfig = filterCoreConfigsForNode(c.CoresConfig, selectedGroup.Nodes[0])
 
 	if fullGroupCount > 1 && c.LogConfig.PprofListen != "" {
 		// Each worker is a separate process, so give every group its own
@@ -528,66 +524,6 @@ func filterCoreConfigsForNode(coreConfigs []conf.CoreConfig, nodeConfig conf.Nod
 	return coreConfigs
 }
 
-func prepareChildCoreConfigs(coreConfigs []conf.CoreConfig, nodeConfig conf.NodeConfig, groupID int) ([]conf.CoreConfig, error) {
-	filtered := filterCoreConfigsForNode(coreConfigs, nodeConfig)
-	cloned := make([]conf.CoreConfig, len(filtered))
-	copy(cloned, filtered)
-
-	executable, err := os.Executable()
-	if err != nil {
-		return nil, fmt.Errorf("resolve executable error: %w", err)
-	}
-	workDir := childWorkDir(executable, groupID)
-	if err := os.MkdirAll(workDir, 0755); err != nil {
-		return nil, fmt.Errorf("create child work dir error: %w", err)
-	}
-
-	for i := range cloned {
-		if cloned[i].SingConfig == nil {
-			continue
-		}
-		singCopy := *cloned[i].SingConfig
-		cloned[i].SingConfig = &singCopy
-		if singCopy.OriginalPath == "" {
-			continue
-		}
-		childPath, err := prepareChildSingConfig(singCopy.OriginalPath, workDir, groupID)
-		if err != nil {
-			return nil, err
-		}
-		cloned[i].SingConfig.OriginalPath = childPath
-	}
-
-	return cloned, nil
-}
-
-func prepareChildSingConfig(originalPath, workDir string, groupID int) (string, error) {
-	data, err := os.ReadFile(originalPath)
-	if err != nil {
-		return "", fmt.Errorf("read sing original config error: %w", err)
-	}
-
-	var root map[string]interface{}
-	if err := json.Unmarshal(data, &root); err != nil {
-		return "", fmt.Errorf("unmarshal sing original config error: %w", err)
-	}
-
-	experimental := getOrCreateMap(root, "experimental")
-	cacheFile := getOrCreateMap(experimental, "cache_file")
-	cacheFile["enabled"] = true
-	cacheFile["path"] = filepath.Join(workDir, "cache.db")
-
-	childPath := filepath.Join(workDir, fmt.Sprintf("sing_origin_group_%d.json", groupID))
-	content, err := json.MarshalIndent(root, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("marshal child sing config error: %w", err)
-	}
-	if err := os.WriteFile(childPath, content, 0644); err != nil {
-		return "", fmt.Errorf("write child sing config error: %w", err)
-	}
-	return childPath, nil
-}
-
 func formatNodeIDs(nodes []conf.NodeConfig) string {
 	if len(nodes) == 0 {
 		return ""
@@ -603,17 +539,6 @@ func formatNodeIDs(nodes []conf.NodeConfig) string {
 
 func childWorkDir(executable string, groupID int) string {
 	return filepath.Join(filepath.Dir(executable), fmt.Sprintf("group-%d", groupID))
-}
-
-func getOrCreateMap(parent map[string]interface{}, key string) map[string]interface{} {
-	if value, ok := parent[key]; ok {
-		if child, ok := value.(map[string]interface{}); ok {
-			return child
-		}
-	}
-	child := make(map[string]interface{})
-	parent[key] = child
-	return child
 }
 
 func sendSignalToChildren(children map[int]*exec.Cmd, sig os.Signal) {

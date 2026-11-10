@@ -13,7 +13,7 @@ import (
 
 func newTestManager(t *testing.T) *Manager {
 	t.Helper()
-	m, err := NewManager(&conf.MachineConfig{APIHost: "http://127.0.0.1:1", MachineID: 1, Token: "t"}, nil, nil, "test")
+	m, err := NewManager(&conf.MachineConfig{APIHost: "http://127.0.0.1:1", MachineID: 1, Token: "t"}, nil, "test")
 	if err != nil {
 		t.Fatal(err)
 	}

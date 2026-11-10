@@ -65,8 +65,7 @@ func buildInbound(option *conf.Options, nodeInfo *panel.NodeInfo, tag string) (*
 		err = buildShadowsocks(option, nodeInfo, in)
 		network = "tcp"
 	case "hysteria":
-		err = buildHysteria(nodeInfo, in)
-		network = "hysteria"
+		return nil, errors.New("hysteria v1 is not supported by xray, switch the node to version 2 in panel")
 	case "hysteria2":
 		err = buildHysteria2(nodeInfo, in)
 		network = "hysteria"
@@ -466,52 +465,6 @@ func buildShadowsocks(config *conf.Options, nodeInfo *panel.NodeInfo, inbound *c
 	sets, err := json.Marshal(settings)
 	if err != nil {
 		return fmt.Errorf("marshal shadowsocks settings error: %s", err)
-	}
-	inbound.Settings = (*json.RawMessage)(&sets)
-	return nil
-}
-
-func buildHysteria(nodeInfo *panel.NodeInfo, inbound *coreConf.InboundDetourConfig) error {
-	inbound.Protocol = "hysteria"
-	s := nodeInfo.Hysteria
-	settings := &coreConf.HysteriaServerConfig{
-		Version: 1,
-	}
-	t := coreConf.TransportProtocol("hysteria")
-	inbound.StreamSetting = &coreConf.StreamConfig{Network: &t}
-	hysteriaSetting := &coreConf.HysteriaConfig{
-		Version: 1,
-	}
-	var finalMask *coreConf.FinalMask
-	if s.UpMbps > 0 || s.DownMbps > 0 {
-		up := coreConf.Bandwidth(strconv.Itoa(s.UpMbps) + "mbps")
-		down := coreConf.Bandwidth(strconv.Itoa(s.DownMbps) + "mbps")
-		finalMask = &coreConf.FinalMask{
-			QuicParams: &coreConf.QuicParamsConfig{
-				Congestion: "force-brutal",
-				BrutalUp:   up,
-				BrutalDown: down,
-			},
-		}
-	}
-	if s.Obfs != "" {
-		rawObfsJSON := json.RawMessage(fmt.Sprintf(`{"password":"%s"}`, s.Obfs))
-		udp := []coreConf.Mask{
-			{
-				Type:     "salamander",
-				Settings: &rawObfsJSON,
-			},
-		}
-		if finalMask == nil {
-			finalMask = &coreConf.FinalMask{}
-		}
-		finalMask.Udp = udp
-	}
-	inbound.StreamSetting.FinalMask = finalMask
-	inbound.StreamSetting.HysteriaSettings = hysteriaSetting
-	sets, err := json.Marshal(settings)
-	if err != nil {
-		return fmt.Errorf("marshal hysteria settings error: %s", err)
 	}
 	inbound.Settings = (*json.RawMessage)(&sets)
 	return nil

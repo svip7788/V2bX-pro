@@ -46,8 +46,8 @@ func TestUpsertMachineMultiSite(t *testing.T) {
 		t.Fatalf("unexpected machines: %+v", ms)
 	}
 
-	na, _ := ms[0].NodeConfig(3, "anytls", "xray")
-	nb, _ := ms[1].NodeConfig(3, "anytls", "xray")
+	na, _ := ms[0].NodeConfig(3, "anytls")
+	nb, _ := ms[1].NodeConfig(3, "anytls")
 	if na.Options.CertConfig.CertFile == nb.Options.CertConfig.CertFile {
 		t.Fatalf("same node id on two panels must not share cert file: %s", na.Options.CertConfig.CertFile)
 	}
@@ -81,11 +81,11 @@ func TestMachinesDedupAndCores(t *testing.T) {
 	if ms := c.Machines(); len(ms) != 1 {
 		t.Fatalf("duplicate/disabled machines should be skipped, got %d", len(ms))
 	}
-	if cores := MachinesCoreConfigs(c.Machines(), nil); len(cores) != 1 || cores[0].Type != "sing" {
-		t.Fatalf("sing-only machine should start only sing core")
+	if cores := MachineCoreConfigs(nil); len(cores) != 1 || cores[0].Type != "xray" || cores[0].XrayConfig == nil {
+		t.Fatalf("machine mode should start a single xray core, got %+v", cores)
 	}
-	c.MachineConfigs = []*MachineConfig{{APIHost: "https://b", MachineID: 1, Token: "t"}}
-	if cores := MachinesCoreConfigs(c.Machines(), nil); len(cores) != 2 {
-		t.Fatalf("any auto machine should add xray core, got %d", len(cores))
+	existing := []CoreConfig{{Type: "xray", Name: "x"}}
+	if cores := MachineCoreConfigs(existing); len(cores) != 1 || cores[0].Name != "x" {
+		t.Fatalf("hand-written Cores should be kept, got %+v", cores)
 	}
 }

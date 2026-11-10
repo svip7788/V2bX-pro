@@ -69,13 +69,13 @@ jobs:
           # wlynxg/anet 在 Android 下 linkname 了 net 内部符号，需关闭链接检查
           EXTRA_LDFLAGS=""
           if [ "$GOOS" = "android" ]; then EXTRA_LDFLAGS="-checklinkname=0"; fi
-          GOEXPERIMENT=jsonv2 go build -v -o build_assets/V2bX -tags "sing xray with_quic with_grpc with_utls with_wireguard with_acme with_gvisor" -trimpath -ldflags "-X 'github.com/InazumaV/V2bX/cmd.version=$version' -s -w -buildid= $EXTRA_LDFLAGS"
+          GOEXPERIMENT=jsonv2 go build -v -o build_assets/V2bX -tags "xray" -trimpath -ldflags "-X 'github.com/InazumaV/V2bX/cmd.version=$version' -s -w -buildid= $EXTRA_LDFLAGS"
 
       - name: Build Mips softfloat V2bX
         if: matrix.goarch == 'mips' || matrix.goarch == 'mipsle'
         run: |
           echo "version: $version"
-          GOEXPERIMENT=jsonv2 GOMIPS=softfloat go build -v -o build_assets/V2bX_softfloat -tags "sing xray with_quic with_grpc with_utls with_wireguard with_acme with_gvisor" -trimpath -ldflags "-X 'github.com/InazumaV/V2bX/cmd.version=$version' -s -w -buildid="
+          GOEXPERIMENT=jsonv2 GOMIPS=softfloat go build -v -o build_assets/V2bX_softfloat -tags "xray" -trimpath -ldflags "-X 'github.com/InazumaV/V2bX/cmd.version=$version' -s -w -buildid="
       - name: Rename Windows V2bX
         if: matrix.goos == 'windows'
         run: |

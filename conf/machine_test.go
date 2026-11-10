@@ -20,7 +20,7 @@ func TestMachineConfigLoad(t *testing.T) {
 		t.Fatalf("machine config not loaded: %+v", c.MachineConfig)
 	}
 
-	nc, err := c.MachineConfig.NodeConfig(7, "vless", "xray")
+	nc, err := c.MachineConfig.NodeConfig(7, "vless")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,47 +38,48 @@ func TestMachineConfigLoad(t *testing.T) {
 	}
 }
 
-func TestMachineCoreSelection(t *testing.T) {
-	both := []string{"xray", "sing"}
-	cases := []struct {
-		mode, nodeType string
-		available      []string
-		want           string
-	}{
-		{"auto", "vless", both, "xray"},
-		{"auto", "hysteria2", both, "sing"},
-		{"auto", "tuic", both, "sing"},
-		{"auto", "anytls", both, "xray"},
-		{"auto", "anytls", []string{"sing"}, "sing"},
-		{"sing", "vmess", both, "sing"},
-		{"xray", "trojan", both, "xray"},
-		{"auto", "vless", []string{"sing"}, "sing"},
+func TestMachineQUICNodeUsesXray(t *testing.T) {
+	m := &MachineConfig{APIHost: "http://p/", MachineID: 1, Token: "t", Core: "sing"}
+	if NormalizeMachineNodeType("hysteria") != "" {
+		t.Fatal("hysteria v1 should be unsupported")
 	}
-	for _, tc := range cases {
-		m := &MachineConfig{Core: tc.mode}
-		if got := m.CoreTypeFor(tc.nodeType, tc.available); got != tc.want {
-			t.Errorf("%s/%s: got %s want %s", tc.mode, tc.nodeType, got, tc.want)
+	for _, typ := range []string{"hysteria2", "tuic"} {
+		nc, err := m.NodeConfig(5, typ)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if nc.ApiConfig.APIHost != "http://p" {
+			t.Fatalf("trailing slash not trimmed: %s", nc.ApiConfig.APIHost)
+		}
+		if nc.Options.Core != "xray" || nc.Options.XrayOptions == nil || nc.Options.CertConfig.CertMode != "self" {
+			t.Fatalf("%s: bad options: %+v %+v", typ, nc.Options, nc.Options.CertConfig)
 		}
 	}
 }
 
-func TestMachineSingNodeOptions(t *testing.T) {
-	m := &MachineConfig{APIHost: "http://p/", MachineID: 1, Token: "t"}
-	nc, err := m.NodeConfig(5, "hysteria2", "sing")
-	if err != nil {
+func TestLegacySingConfigFallsBackToXray(t *testing.T) {
+	data := `{"Cores":[{"Type":"sing","Name":"s1","Log":{"Level":"error"}}],
+"Nodes":[{"ApiHost":"http://p","ApiKey":"k","NodeID":1,"NodeType":"hysteria2","Core":"sing","CoreName":"s1","EnableSniff":true}]}`
+	p := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(p, []byte(data), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if nc.ApiConfig.APIHost != "http://p" {
-		t.Fatalf("trailing slash not trimmed: %s", nc.ApiConfig.APIHost)
+	c := New()
+	if err := c.LoadFromPath(p); err != nil {
+		t.Fatal(err)
 	}
-	if nc.Options.SingOptions == nil || nc.Options.ListenIP != "::" || nc.Options.CertConfig.CertMode != "self" {
-		t.Fatalf("bad sing options: %+v %+v", nc.Options, nc.Options.CertConfig)
+	if len(c.CoresConfig) != 1 || c.CoresConfig[0].Type != "xray" || c.CoresConfig[0].XrayConfig == nil {
+		t.Fatalf("sing-only Cores should become default xray, got %+v", c.CoresConfig)
+	}
+	o := c.NodeConfig[0].Options
+	if o.Core != "xray" || o.XrayOptions == nil || o.CoreName != "" {
+		t.Fatalf("sing node should switch to xray: %+v", o)
 	}
 }
 
 func TestMachineXrayAnyTLSNodeOptions(t *testing.T) {
 	m := &MachineConfig{APIHost: "http://p", MachineID: 1, Token: "t"}
-	nc, err := m.NodeConfig(6, "anytls", "xray")
+	nc, err := m.NodeConfig(6, "anytls")
 	if err != nil {
 		t.Fatal(err)
 	}

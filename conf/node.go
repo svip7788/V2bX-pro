@@ -266,9 +266,11 @@ type Options struct {
 	LimitConfig            LimitConfig     `json:"LimitConfig"`
 	RawOptions             json.RawMessage `json:"RawOptions"`
 	XrayOptions            *XrayOptions    `json:"XrayOptions"`
-	SingOptions            *SingOptions    `json:"SingOptions"`
 	CertConfig             *CertConfig     `json:"CertConfig"`
 }
+
+// legacySingCore 已移除的 sing-box 内核，旧配置里的 sing 一律改用 xray
+const legacySingCore = "sing"
 
 func (o *Options) UnmarshalJSON(data []byte) error {
 	type opt Options
@@ -277,12 +279,10 @@ func (o *Options) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	switch o.Core {
-	case "xray":
+	case "xray", legacySingCore:
+		o.Core = "xray"
 		o.XrayOptions = NewXrayOptions()
 		return json.Unmarshal(data, o.XrayOptions)
-	case "sing":
-		o.SingOptions = NewSingOptions()
-		return json.Unmarshal(data, o.SingOptions)
 	default:
 		o.Core = ""
 		o.RawOptions = data

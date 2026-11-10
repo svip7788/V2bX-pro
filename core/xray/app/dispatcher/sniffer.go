@@ -3,7 +3,6 @@ package dispatcher
 import (
 	"context"
 
-	singsniff "github.com/sagernet/sing-box/common/sniff"
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/net"
@@ -64,7 +63,7 @@ var errUnknownContent = errors.New("unknown content")
 var errNotBitTorrent = errors.New("not bittorrent")
 
 func sniffHTTPTracker(_ context.Context, b []byte) (SniffResult, error) {
-	ok, needMore := singsniff.IsHTTPTrackerRequest(b)
+	ok, needMore := isHTTPTrackerRequest(b)
 	if ok {
 		return &bittorrent.SniffHeader{}, nil
 	}
@@ -76,7 +75,7 @@ func sniffHTTPTracker(_ context.Context, b []byte) (SniffResult, error) {
 
 // sniffBitTorrentUDP covers DHT and UDP tracker packets, which stay plaintext under MSE/PE.
 func sniffBitTorrentUDP(_ context.Context, b []byte) (SniffResult, error) {
-	if singsniff.IsDHTMessage(b) || singsniff.IsUDPTrackerConnect(b) {
+	if isDHTMessage(b) || isUDPTrackerConnect(b) {
 		return &bittorrent.SniffHeader{}, nil
 	}
 	return nil, errNotBitTorrent

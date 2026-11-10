@@ -20,10 +20,3 @@ func TestXrayDefaultsFavorHighConcurrency(t *testing.T) {
 		t.Fatal("expected xray sniffing to be enabled by default")
 	}
 }
-
-func TestSingDefaultsFavorHighConcurrency(t *testing.T) {
-	o := NewSingOptions()
-	if !o.SniffEnabled {
-		t.Fatal("expected sing sniffing to be enabled by default")
-	}
-}

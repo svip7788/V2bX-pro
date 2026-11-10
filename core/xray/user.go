@@ -221,8 +221,6 @@ func (c *Xray) AddUsers(p *vCore.AddUsersParams) (added int, err error) {
 			p.Users,
 			p.Shadowsocks.Cipher,
 			p.Shadowsocks.ServerKey)
-	case "hysteria":
-		users = buildHysteria2Users(p.Tag, p.Users)
 	case "hysteria2":
 		users = buildHysteria2Users(p.Tag, p.Users)
 	case "tuic":

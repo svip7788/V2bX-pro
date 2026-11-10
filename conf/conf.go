@@ -71,6 +71,6 @@ func (p *Conf) LoadFromPath(filePath string) error {
 	if err != nil {
 		return fmt.Errorf("unmarshal config error: %s", err)
 	}
-
+	p.dropLegacyCores()
 	return nil
 }

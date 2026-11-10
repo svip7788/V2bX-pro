@@ -11,24 +11,6 @@ check_ipv6_support() {
 }
 
 add_node_config() {
-    echo -e "${green}请选择节点核心类型：${plain}"
-    echo -e "${green}1. xray${plain}"
-    echo -e "${green}2. singbox${plain}"
-    echo -e "${green}3. hysteria2${plain}"
-    read -rp "请输入：" core_type
-    if [ "$core_type" == "1" ]; then
-        core="xray"
-        core_xray=true
-    elif [ "$core_type" == "2" ]; then
-        core="sing"
-        core_sing=true
-    elif [ "$core_type" == "3" ]; then
-        core="hysteria2"
-        core_hysteria2=true
-    else
-        echo "无效的选择。请选择 1 2 3。"
-        continue
-    fi
     while true; do
         read -rp "请输入节点Node ID：" NodeID
         # 判断NodeID是否为正整数
@@ -39,42 +21,29 @@ add_node_config() {
         fi
     done
 
-    if [ "$core_hysteria2" = true ] && [ "$core_xray" = false ] && [ "$core_sing" = false ]; then
-        NodeType="hysteria2"
-    else
-        echo -e "${yellow}请选择节点传输协议：${plain}"
-        echo -e "${green}1. Shadowsocks${plain}"
-        echo -e "${green}2. Vless${plain}"
-        echo -e "${green}3. Vmess${plain}"
-        if [ "$core_sing" == true ]; then
-            echo -e "${green}4. Hysteria${plain}"
-            echo -e "${green}5. Hysteria2${plain}"
-        fi
-        if [ "$core_hysteria2" == true ] && [ "$core_sing" = false ]; then
-            echo -e "${green}5. Hysteria2${plain}"
-        fi
-        echo -e "${green}6. Trojan${plain}"  
-        if [ "$core_sing" == true ]; then
-            echo -e "${green}7. Tuic${plain}"
-            echo -e "${green}8. AnyTLS${plain}"
-        fi
-        read -rp "请输入：" NodeType
-        case "$NodeType" in
-            1 ) NodeType="shadowsocks" ;;
-            2 ) NodeType="vless" ;;
-            3 ) NodeType="vmess" ;;
-            4 ) NodeType="hysteria" ;;
-            5 ) NodeType="hysteria2" ;;
-            6 ) NodeType="trojan" ;;
-            7 ) NodeType="tuic" ;;
-            8 ) NodeType="anytls" ;;
-            * ) NodeType="shadowsocks" ;;
-        esac
-    fi
+    echo -e "${yellow}请选择节点传输协议：${plain}"
+    echo -e "${green}1. Shadowsocks${plain}"
+    echo -e "${green}2. Vless${plain}"
+    echo -e "${green}3. Vmess${plain}"
+    echo -e "${green}4. Hysteria2${plain}"
+    echo -e "${green}5. Trojan${plain}"
+    echo -e "${green}6. Tuic${plain}"
+    echo -e "${green}7. AnyTLS${plain}"
+    read -rp "请输入：" NodeType
+    case "$NodeType" in
+        1 ) NodeType="shadowsocks" ;;
+        2 ) NodeType="vless" ;;
+        3 ) NodeType="vmess" ;;
+        4 ) NodeType="hysteria2" ;;
+        5 ) NodeType="trojan" ;;
+        6 ) NodeType="tuic" ;;
+        7 ) NodeType="anytls" ;;
+        * ) NodeType="shadowsocks" ;;
+    esac
     fastopen=true
     if [ "$NodeType" == "vless" ]; then
         read -rp "请选择是否为reality节点？(y/n)" isreality
-    elif [ "$NodeType" == "hysteria" ] || [ "$NodeType" == "hysteria2" ] || [ "$NodeType" == "tuic" ] || [ "$NodeType" == "anytls" ]; then
+    elif [ "$NodeType" == "hysteria2" ] || [ "$NodeType" == "tuic" ] || [ "$NodeType" == "anytls" ]; then
         fastopen=false
         istls="y"
     fi
@@ -101,16 +70,9 @@ add_node_config() {
             echo -e "${red}请手动修改配置文件后重启V2bX！${plain}"
         fi
     fi
-    ipv6_support=$(check_ipv6_support)
-    listen_ip="0.0.0.0"
-    if [ "$ipv6_support" -eq 1 ]; then
-        listen_ip="::"
-    fi
-    node_config=""
-    if [ "$core_type" == "1" ]; then 
     node_config=$(cat <<EOF
 {
-            "Core": "$core",
+            "Core": "xray",
             "ApiHost": "$ApiHost",
             "ApiKey": "$ApiKey",
             "NodeID": $NodeID,
@@ -123,7 +85,7 @@ add_node_config() {
             "EnableProxyProtocol": false,
             "EnableDNS": true,
             "EnableUot": true,
-            "EnableTFO": true,
+            "EnableTFO": $fastopen,
             "DNSType": "UseIPv4",
             "DisableSniffing": false,
             "CertConfig": {
@@ -141,67 +103,6 @@ add_node_config() {
         },
 EOF
 )
-    elif [ "$core_type" == "2" ]; then
-    node_config=$(cat <<EOF
-{
-            "Core": "$core",
-            "ApiHost": "$ApiHost",
-            "ApiKey": "$ApiKey",
-            "NodeID": $NodeID,
-            "NodeType": "$NodeType",
-            "Timeout": 30,
-            "ListenIP": "$listen_ip",
-            "SendIP": "0.0.0.0",
-            "DeviceOnlineMinTraffic": 200,
-            "MinReportTraffic": 0,
-            "EnableTFO": $fastopen,
-            "EnableDNS": true,
-            "EnableSniff": true,
-            "CertConfig": {
-                "CertMode": "$certmode",
-                "RejectUnknownSni": false,
-                "CertDomain": "$certdomain",
-                "CertFile": "/etc/V2bX/fullchain.cer",
-                "KeyFile": "/etc/V2bX/cert.key",
-                "Email": "v2bx@github.com",
-                "Provider": "cloudflare",
-                "DNSEnv": {
-                    "EnvName": "env1"
-                }
-            }
-        },
-EOF
-)
-    elif [ "$core_type" == "3" ]; then
-    node_config=$(cat <<EOF
-{
-            "Core": "$core",
-            "ApiHost": "$ApiHost",
-            "ApiKey": "$ApiKey",
-            "NodeID": $NodeID,
-            "NodeType": "$NodeType",
-            "Hysteria2ConfigPath": "/etc/V2bX/hy2config.yaml",
-            "Timeout": 30,
-            "ListenIP": "",
-            "SendIP": "0.0.0.0",
-            "DeviceOnlineMinTraffic": 200,
-            "MinReportTraffic": 0,
-            "CertConfig": {
-                "CertMode": "$certmode",
-                "RejectUnknownSni": false,
-                "CertDomain": "$certdomain",
-                "CertFile": "/etc/V2bX/fullchain.cer",
-                "KeyFile": "/etc/V2bX/cert.key",
-                "Email": "v2bx@github.com",
-                "Provider": "cloudflare",
-                "DNSEnv": {
-                    "EnvName": "env1"
-                }
-            }
-        },
-EOF
-)
-    fi
     nodes_config+=("$node_config")
 }
 
@@ -220,9 +121,6 @@ generate_config_file() {
     
     nodes_config=()
     first_node=true
-    core_xray=false
-    core_sing=false
-    core_hysteria2=false
     fixed_api_info=false
     check_api=false
     
@@ -249,12 +147,7 @@ generate_config_file() {
         fi
     done
 
-    # 初始化核心配置数组
-    cores_config="["
-
-    # 检查并添加xray核心配置
-    if [ "$core_xray" = true ]; then
-        cores_config+="
+    cores_config="[
     {
         \"Type\": \"xray\",
         \"Log\": {
@@ -271,41 +164,7 @@ generate_config_file() {
         },
         \"OutboundConfigPath\": \"/etc/V2bX/custom_outbound.json\",
         \"RouteConfigPath\": \"/etc/V2bX/route.json\"
-    },"
-    fi
-
-    # 检查并添加sing核心配置
-    if [ "$core_sing" = true ]; then
-        cores_config+="
-    {
-        \"Type\": \"sing\",
-        \"Log\": {
-            \"Level\": \"error\",
-            \"Timestamp\": true
-        },
-        \"NTP\": {
-            \"Enable\": false,
-            \"Server\": \"time.apple.com\",
-            \"ServerPort\": 0
-        },
-        \"OriginalPath\": \"/etc/V2bX/sing_origin.json\"
-    },"
-    fi
-
-    # 检查并添加hysteria2核心配置
-    if [ "$core_hysteria2" = true ]; then
-        cores_config+="
-    {
-        \"Type\": \"hysteria2\",
-        \"Log\": {
-            \"Level\": \"error\"
-        }
-    },"
-    fi
-
-    # 移除最后一个逗号并关闭数组
-    cores_config+="]"
-    cores_config=$(echo "$cores_config" | sed 's/},]$/}]/')
+    }]"
 
     # 切换到配置文件目录
     cd /etc/V2bX
@@ -413,10 +272,6 @@ EOF
 }
 EOF
     ipv6_support=$(check_ipv6_support)
-    dnsstrategy="ipv4_only"
-    if [ "$ipv6_support" -eq 1 ]; then
-        dnsstrategy="prefer_ipv4"
-    fi
     xray_query_strategy="UseIPv4"
     if [ "$ipv6_support" -eq 1 ]; then
         xray_query_strategy="UseIP"
@@ -430,107 +285,6 @@ EOF
     "queryStrategy": "$xray_query_strategy",
     "tag": "dns_inbound"
 }
-EOF
-    # 创建 sing_origin.json 文件
-    cat <<EOF > /etc/V2bX/sing_origin.json
-{
-  "dns": {
-    "servers": [
-      {
-        "tag": "local",
-        "type": "local"
-      }
-    ],
-    "strategy": "$dnsstrategy"
-  },
-  "outbounds": [
-    {
-      "tag": "direct",
-      "type": "direct",
-      "domain_resolver": {
-        "server": "local",
-        "strategy": "$dnsstrategy"
-      }
-    },
-    {
-      "type": "block",
-      "tag": "block"
-    }
-  ],
-  "route": {
-    "rules": [
-      {
-        "action": "sniff"
-      },
-      {
-        "ip_is_private": true,
-        "outbound": "block"
-      },
-      {
-        "domain_regex": [
-            "(api|ps|sv|offnavi|newvector|ulog.imap|newloc)(.map|).(baidu|n.shifen).com",
-            "(.+.|^)(360|so).(cn|com)",
-            "(Subject|HELO|SMTP)",
-            "(torrent|.torrent|peer_id=|info_hash|get_peers|find_node|BitTorrent|announce_peer|announce.php?passkey=)",
-            "(^.@)(guerrillamail|guerrillamailblock|sharklasers|grr|pokemail|spam4|bccto|chacuo|027168).(info|biz|com|de|net|org|me|la)",
-            "(.?)(xunlei|sandai|Thunder|XLLiveUD)(.)",
-            "(..||)(dafahao|mingjinglive|botanwang|minghui|dongtaiwang|falunaz|epochtimes|ntdtv|falundafa|falungong|wujieliulan|zhengjian).(org|com|net)",
-            "(ed2k|.torrent|peer_id=|announce|info_hash|get_peers|find_node|BitTorrent|announce_peer|announce.php?passkey=|magnet:|xunlei|sandai|Thunder|XLLiveUD|bt_key)",
-            "(.+.|^)(360).(cn|com|net)",
-            "(.*.||)(guanjia.qq.com|qqpcmgr|QQPCMGR)",
-            "(.*.||)(rising|kingsoft|duba|xindubawukong|jinshanduba).(com|net|org)",
-            "(.*.||)(netvigator|torproject).(com|cn|net|org)",
-            "(..||)(visa|mycard|gash|beanfun|bank).",
-            "(.*.||)(gov|12377|12315|talk.news.pts.org|creaders|zhuichaguoji|efcc.org|cyberpolice|aboluowang|tuidang|epochtimes|zhengjian|110.qq|mingjingnews|inmediahk|xinsheng|breakgfw|chengmingmag|jinpianwang|qi-gong|mhradio|edoors|renminbao|soundofhope|xizang-zhiye|bannedbook|ntdtv|12321|secretchina|dajiyuan|boxun|chinadigitaltimes|dwnews|huaglad|oneplusnews|epochweekly|cn.rfi).(cn|com|org|net|club|net|fr|tw|hk|eu|info|me)",
-            "(.*.||)(miaozhen|cnzz|talkingdata|umeng).(cn|com)",
-            "(.*.||)(mycard).(com|tw)",
-            "(.*.||)(gash).(com|tw)",
-            "(.bank.)",
-            "(.*.||)(pincong).(rocks)",
-            "(.*.||)(taobao).(com)",
-            "(.*.||)(laomoe|jiyou|ssss|lolicp|vv1234|0z|4321q|868123|ksweb|mm126).(com|cloud|fun|cn|gs|xyz|cc)",
-            "(flows|miaoko).(pages).(dev)"
-        ],
-        "outbound": "block"
-      },
-      {
-        "outbound": "direct",
-        "network": [
-          "udp","tcp"
-        ]
-      }
-    ]
-  },
-  "experimental": {
-    "cache_file": {
-      "enabled": true
-    }
-  }
-}
-EOF
-
-    # 创建 hy2config.yaml 文件           
-    cat <<EOF > /etc/V2bX/hy2config.yaml
-quic:
-  initStreamReceiveWindow: 8388608
-  maxStreamReceiveWindow: 8388608
-  initConnReceiveWindow: 20971520
-  maxConnReceiveWindow: 20971520
-  maxIdleTimeout: 30s
-  maxIncomingStreams: 1024
-  disablePathMTUDiscovery: false
-ignoreClientBandwidth: false
-disableUDP: false
-udpIdleTimeout: 60s
-resolver:
-  type: system
-acl:
-  inline:
-    - direct(geosite:google)
-    - reject(geosite:cn)
-    - reject(geoip:cn)
-masquerade:
-  type: 404
 EOF
     echo -e "${green}V2bX 配置文件生成完成,正在重新启动服务${plain}"
     v2bx restart

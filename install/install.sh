@@ -7,20 +7,20 @@ plain='\033[0m'
 
 cur_dir=$(pwd)
 
-# 机器模式（Xboard 面板一键安装）：--panel URL --machine-id N --token T [--version V] [--core auto|sing|xray] [--repo owner/name]
+# 机器模式（Xboard 面板一键安装）：--panel URL --machine-id N --token T [--version V] [--repo owner/name]
+# --core 已废弃（内核固定为 xray），旧安装命令带上也会被忽略
 repo="svip7788/V2bX-pro"
 target_version=""
 panel_url=""
 machine_id=""
 machine_token=""
-machine_core="auto"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --panel) panel_url="$2"; shift 2 ;;
         --machine-id) machine_id="$2"; shift 2 ;;
         --token) machine_token="$2"; shift 2 ;;
         --version) target_version="$2"; shift 2 ;;
-        --core) machine_core="$2"; shift 2 ;;
+        --core) shift 2 ;;
         --repo) repo="$2"; shift 2 ;;
         *) target_version="$1"; shift ;;
     esac
@@ -30,7 +30,6 @@ if [[ -n "$panel_url" || -n "$machine_id" || -n "$machine_token" ]]; then
     if [[ -z "$panel_url" || -z "$machine_token" || ! "$machine_id" =~ ^[0-9]+$ ]]; then
         echo -e "${red}机器模式需要同时提供 --panel、--machine-id、--token${plain}" && exit 1
     fi
-    case "$machine_core" in auto|sing|xray) ;; *) echo -e "${red}--core 只能是 auto/sing/xray${plain}" && exit 1 ;; esac
     machine_mode=true
 fi
 if [[ ! "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
@@ -179,7 +178,7 @@ write_machine_config() {
     # 已接入其他面板时追加为多站，同一面板则更新凭据
     local out
     if out=$(V2BX_MACHINE_TOKEN="$machine_token" /usr/local/V2bX/V2bX machine set -c /etc/V2bX/config.json \
-        --panel "${panel_url%/}" --machine-id "$machine_id" --core "$machine_core" 2>&1); then
+        --panel "${panel_url%/}" --machine-id "$machine_id" 2>&1); then
         chmod 600 /etc/V2bX/config.json
         case "$out" in
             *MACHINE_added*) echo -e "${green}已追加机器 #${machine_id}，本机现同时接入多个面板${plain}" ;;
@@ -201,7 +200,6 @@ write_machine_config() {
         "ApiHost": "$(json_escape "${panel_url%/}")",
         "MachineID": ${machine_id},
         "Token": "$(json_escape "$machine_token")",
-        "Core": "${machine_core}",
         "Timeout": 30
     }
 }
@@ -335,7 +333,7 @@ EOF
         first_install=false
     fi
 
-    for f in dns.json route.json custom_outbound.json custom_inbound.json sing_origin.json; do
+    for f in dns.json route.json custom_outbound.json custom_inbound.json; do
         if [[ ! -f /etc/V2bX/$f && -f $f ]]; then
             cp $f /etc/V2bX/
         fi
