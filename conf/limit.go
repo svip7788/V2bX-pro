@@ -5,6 +5,7 @@ type LimitConfig struct {
 	EnableDynamicSpeedLimit bool                     `json:"EnableDynamicSpeedLimit"`
 	DynamicSpeedLimitConfig *DynamicSpeedLimitConfig `json:"DynamicSpeedLimitConfig"`
 	BTBanMinutes            int                      `json:"BTBanMinutes"` // ban user on this node after BitTorrent is detected, default 2
+	ConnLimit               int                      `json:"ConnLimit"`    // max concurrent connections (TCP+UDP) per user on this node, 0 = unlimited; panel conn_limit overrides
 }
 
 type DynamicSpeedLimitConfig struct {

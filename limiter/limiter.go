@@ -46,6 +46,7 @@ type Limiter struct {
 	btBanDuration time.Duration
 	btBanned      sync.Map // taguuid -> int64 (ban expiry, unix nano)
 	allowBT       atomic.Bool
+	connLimit     atomic.Int64 // 节点默认的用户并发连接数上限，面板可热更新
 }
 
 const defaultBTBanDuration = 2 * time.Minute
@@ -57,6 +58,7 @@ type UserLimitInfo struct {
 	UID               int
 	SpeedLimit        int
 	DeviceLimit       int
+	ConnLimit         int
 	DynamicSpeedLimit int
 	ExpireTime        int64
 	OverLimit         bool
@@ -193,6 +195,7 @@ func AddLimiter(tag string, l *conf.LimitConfig, users []panel.UserInfo, aliveLi
 		aliveList:     aliveList,
 		btBanDuration: defaultBTBanDuration,
 	}
+	info.SetConnLimit(l.ConnLimit)
 	if l.BTBanMinutes > 0 {
 		info.btBanDuration = time.Duration(l.BTBanMinutes) * time.Minute
 	}
@@ -200,7 +203,8 @@ func AddLimiter(tag string, l *conf.LimitConfig, users []panel.UserInfo, aliveLi
 	for i := range users {
 		info.uuidToUID.Store(users[i].Uuid, users[i].Id)
 		ul := &UserLimitInfo{
-			UID: users[i].Id,
+			UID:       users[i].Id,
+			ConnLimit: users[i].ConnLimit,
 		}
 		if users[i].SpeedLimit != 0 {
 			ul.SpeedLimit = users[i].SpeedLimit
@@ -246,7 +250,8 @@ func (l *Limiter) UpdateUser(tag string, added []panel.UserInfo, deleted []panel
 	}
 	for i := range added {
 		ul := &UserLimitInfo{
-			UID: added[i].Id,
+			UID:       added[i].Id,
+			ConnLimit: added[i].ConnLimit,
 		}
 		if added[i].SpeedLimit != 0 {
 			ul.SpeedLimit = added[i].SpeedLimit
@@ -260,7 +265,22 @@ func (l *Limiter) UpdateUser(tag string, added []panel.UserInfo, deleted []panel
 	}
 }
 
-// UpdateUserLimit 原地更新固定限速和设备数，保留动态限速、平分份额和在线设备状态；
+// UserConnLimit 返回用户在本节点的并发连接数上限，面板下发值优先，否则用节点配置，0 为不限
+func (l *Limiter) UserConnLimit(taguuid string) int {
+	if v, ok := l.userLimitInfo.Load(taguuid); ok {
+		if n := v.(*UserLimitInfo).ConnLimit; n > 0 {
+			return n
+		}
+	}
+	return int(l.connLimit.Load())
+}
+
+// SetConnLimit 更新节点默认的连接数上限，只影响之后的新连接
+func (l *Limiter) SetConnLimit(n int) {
+	l.connLimit.Store(int64(max(0, n)))
+}
+
+// UpdateUserLimit 原地更新固定限速、设备数和连接数，保留动态限速、平分份额和在线设备状态；
 // 返回生效限速变低的 uuid（限速桶在建连时取定，须断开现有连接才能生效）
 func (l *Limiter) UpdateUserLimit(tag string, users []panel.UserInfo) (tightened []string) {
 	now := time.Now().Unix()
@@ -282,6 +302,7 @@ func (l *Limiter) UpdateUserLimit(tag string, users []panel.UserInfo) (tightened
 		}
 		info.SpeedLimit = users[i].SpeedLimit
 		info.DeviceLimit = users[i].DeviceLimit
+		info.ConnLimit = users[i].ConnLimit
 		l.userLimitInfo.Store(key, &info)
 		l.uuidToUID.Store(users[i].Uuid, users[i].Id)
 		if newLimit := effective(&info); newLimit > 0 && (oldLimit == 0 || newLimit < oldLimit) {

@@ -254,7 +254,7 @@ func compareUserList(old, new []panel.UserInfo) (deleted, added, updated []panel
 		case prev.Id != user.Id:
 			deleted = append(deleted, prev)
 			added = append(added, user)
-		case prev.SpeedLimit != user.SpeedLimit || prev.DeviceLimit != user.DeviceLimit:
+		case prev.SpeedLimit != user.SpeedLimit || prev.DeviceLimit != user.DeviceLimit || prev.ConnLimit != user.ConnLimit:
 			updated = append(updated, user)
 		}
 	}

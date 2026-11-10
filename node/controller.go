@@ -30,6 +30,7 @@ type Controller struct {
 	trafficSince            time.Time
 	pendingTraffic          []panel.UserTraffic
 	localDynamic            *localDynamicConfig
+	localConnLimit          *int
 	dynamicGlobal           bool
 	userList                []panel.UserInfo
 	uidToUUID               map[int]string
@@ -108,6 +109,7 @@ func (c *Controller) Start() error {
 
 	c.applyDynamicSpeedLimit(node)
 	c.applyIPWatch(node)
+	c.applyConnLimit(node)
 	// add limiter
 	l := limiter.AddLimiter(c.tag, &c.LimitConfig, c.userList, c.aliveMap)
 	if c.apiClient.AliveMap != nil {
@@ -480,7 +482,7 @@ func (c *Controller) applyUserDelta(action string, users []panel.UserInfo) {
 				continue
 			}
 			prev := c.userList[i]
-			if prev.Id == u.Id && (prev.SpeedLimit != u.SpeedLimit || prev.DeviceLimit != u.DeviceLimit) {
+			if prev.Id == u.Id && (prev.SpeedLimit != u.SpeedLimit || prev.DeviceLimit != u.DeviceLimit || prev.ConnLimit != u.ConnLimit) {
 				updated = append(updated, u)
 			}
 		}

@@ -53,6 +53,32 @@ func TestApplyDynamicSpeedLimitPanelOverridesLocal(t *testing.T) {
 	}
 }
 
+func TestApplyConnLimitPanelOverridesLocal(t *testing.T) {
+	limiter.Init()
+	c := &Controller{tag: "t", Options: &conf.Options{LimitConfig: conf.LimitConfig{ConnLimit: 50}}}
+	c.limiter = limiter.AddLimiter("t", &c.LimitConfig, []panel.UserInfo{{Id: 1, Uuid: "u"}}, nil)
+	key := "t|u"
+
+	c.applyConnLimit(&panel.NodeInfo{})
+	if got := c.limiter.UserConnLimit(key); got != 50 {
+		t.Fatalf("local conn limit should be used, got %d", got)
+	}
+	n := 200
+	c.applyConnLimit(&panel.NodeInfo{ConnLimit: &n})
+	if got := c.limiter.UserConnLimit(key); got != 200 || c.LimitConfig.ConnLimit != 200 {
+		t.Fatalf("panel conn limit not applied, got %d", got)
+	}
+	zero := 0
+	c.applyConnLimit(&panel.NodeInfo{ConnLimit: &zero})
+	if got := c.limiter.UserConnLimit(key); got != 0 {
+		t.Fatalf("panel should be able to disable, got %d", got)
+	}
+	c.applyConnLimit(&panel.NodeInfo{})
+	if got := c.limiter.UserConnLimit(key); got != 50 {
+		t.Fatalf("should fall back to local, got %d", got)
+	}
+}
+
 func TestCheckDynamicSpeedUsesElapsedTime(t *testing.T) {
 	limiter.Init()
 	tag := "dy"

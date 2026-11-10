@@ -221,7 +221,14 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, network net.Network) (*
 			manager: lm,
 		}
 		ip, counted := deviceIP(sessionInbound)
-		lm.AddLink(managedWriter, outboundLink.Reader, sessionInbound.Conn, ip, counted)
+		if !lm.AddLink(managedWriter, outboundLink.Reader, sessionInbound.Conn, ip, counted, limit.UserConnLimit(user.Email)) {
+			errors.LogInfo(ctx, "Limited ", user.Email, " by conn count")
+			common.Close(outboundLink.Writer)
+			common.Close(inboundLink.Writer)
+			common.Interrupt(outboundLink.Reader)
+			common.Interrupt(inboundLink.Reader)
+			return nil, nil, nil, errors.New("Limited ", user.Email, " by conn count")
+		}
 		// Safety net: the tracking map holds a strong reference to the
 		// connection and is normally cleaned up via ManagedWriter.Close().
 		// Some connections end without an explicit Close (xray abandons the
@@ -411,7 +418,12 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 			Counter: &ts.UpCounter,
 		}
 		ip, counted := deviceIP(sessionInbound)
-		lm.AddLink(managedWriter, outbound.Reader, sessionInbound.Conn, ip, counted)
+		if !lm.AddLink(managedWriter, outbound.Reader, sessionInbound.Conn, ip, counted, limit.UserConnLimit(user.Email)) {
+			errors.LogInfo(ctx, "Limited ", user.Email, " by conn count")
+			common.Close(outbound.Writer)
+			common.Interrupt(outbound.Reader)
+			return errors.New("Limited ", user.Email, " by conn count")
+		}
 		context.AfterFunc(ctx, func() { _ = managedWriter.Close() })
 		outbound.Writer = &dispatcher.SizeStatWriter{
 			Counter: downcounter,

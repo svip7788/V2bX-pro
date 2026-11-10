@@ -24,6 +24,25 @@ func TestCheckLimitRejectsExtraCurrentIP(t *testing.T) {
 	}
 }
 
+func TestUserConnLimitPanelOverridesNode(t *testing.T) {
+	Init()
+	lim := AddLimiter("tag", &conf.LimitConfig{ConnLimit: 100}, []panel.UserInfo{
+		{Id: 1, Uuid: "u1", ConnLimit: 20},
+		{Id: 2, Uuid: "u2"},
+	}, map[int]int{})
+
+	if got := lim.UserConnLimit(format.UserTag("tag", "u1")); got != 20 {
+		t.Fatalf("panel conn_limit should win, got %d", got)
+	}
+	if got := lim.UserConnLimit(format.UserTag("tag", "u2")); got != 100 {
+		t.Fatalf("node ConnLimit should be default, got %d", got)
+	}
+	lim.UpdateUserLimit("tag", []panel.UserInfo{{Id: 2, Uuid: "u2", ConnLimit: 5}})
+	if got := lim.UserConnLimit(format.UserTag("tag", "u2")); got != 5 {
+		t.Fatalf("updated conn_limit should apply, got %d", got)
+	}
+}
+
 func TestMarkOnlineDeviceReportedAllowsSameIPCarryover(t *testing.T) {
 	Init()
 	lim := AddLimiter("tag", &conf.LimitConfig{}, []panel.UserInfo{

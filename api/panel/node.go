@@ -32,6 +32,7 @@ type NodeInfo struct {
 
 	DynamicSpeedLimit *DynamicSpeedLimit
 	IPWatch           *IPWatch
+	ConnLimit         *int
 	// CoreHash 除可热更新项外的配置摘要，相同则无需重建入站
 	CoreHash string
 
@@ -67,6 +68,8 @@ type CommonNode struct {
 
 	DynamicSpeedLimit *DynamicSpeedLimit `json:"dynamic_speed_limit"`
 	IPWatch           *IPWatch           `json:"ip_watch"`
+	// ConnLimit 每个用户在本节点的并发连接数上限，0 为不限；未下发时用本地配置
+	ConnLimit *int `json:"conn_limit"`
 }
 
 // IPWatch 频繁访问查询出口 IP 的目标时上报面板记录；未下发或 enable=false 为关闭
@@ -217,7 +220,7 @@ type RelayRule struct {
 }
 
 // hotReloadKeys 只影响限速/监控策略的配置项，变化时可原地生效，不必重建入站断开所有连接
-var hotReloadKeys = []string{"dynamic_speed_limit", "ip_watch"}
+var hotReloadKeys = []string{"dynamic_speed_limit", "ip_watch", "conn_limit"}
 
 // coreConfigHash 去掉 hotReloadKeys 后的配置摘要；解析失败返回空串，按需要重建处理
 func coreConfigHash(body []byte) string {
@@ -426,6 +429,7 @@ func (c *Client) GetNodeInfo(ctx context.Context) (node *NodeInfo, err error) {
 	node.Rules.AllowBT = cm.AllowBT
 	node.DynamicSpeedLimit = cm.DynamicSpeedLimit
 	node.IPWatch = cm.IPWatch
+	node.ConnLimit = cm.ConnLimit
 
 	// set interval
 	node.PushInterval = intervalToTime(cm.BaseConfig.PushInterval)

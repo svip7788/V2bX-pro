@@ -161,6 +161,7 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 		c.info = newN
 		c.applyDynamicSpeedLimit(newN)
 		c.applyIPWatch(newN)
+		c.applyConnLimit(newN)
 		c.limiter.SetDynamicConfig(&c.LimitConfig)
 		c.resetDynamicTraffic()
 		log.WithField("tag", c.tag).Info("Node policy changed, applied without reload")
@@ -177,6 +178,7 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 		c.rebuildUIDToUUID()
 		c.applyDynamicSpeedLimit(newN)
 		c.applyIPWatch(newN)
+		c.applyConnLimit(newN)
 		c.resetDynamicTraffic()
 		// Remove old node
 		log.WithField("tag", c.tag).Info("Node changed, reload")
@@ -332,6 +334,26 @@ func (c *Controller) applyDynamicSpeedLimit(n *panel.NodeInfo) {
 	}
 	c.LimitConfig.EnableDynamicSpeedLimit = enable
 	c.LimitConfig.DynamicSpeedLimitConfig = cfg
+}
+
+// applyConnLimit 面板下发了 conn_limit 就以面板为准（0 为不限），否则回落到本地配置
+func (c *Controller) applyConnLimit(n *panel.NodeInfo) {
+	if c.localConnLimit == nil {
+		local := c.LimitConfig.ConnLimit
+		c.localConnLimit = &local
+	}
+	limit := *c.localConnLimit
+	if n.ConnLimit != nil {
+		limit = *n.ConnLimit
+	}
+	if limit != c.LimitConfig.ConnLimit {
+		log.WithFields(log.Fields{"tag": c.tag, "conn_limit": limit, "panel": n.ConnLimit != nil}).
+			Info("Conn limit changed")
+	}
+	c.LimitConfig.ConnLimit = limit
+	if c.limiter != nil {
+		c.limiter.SetConnLimit(limit)
+	}
 }
 
 func (c *Controller) applyIPWatch(n *panel.NodeInfo) {

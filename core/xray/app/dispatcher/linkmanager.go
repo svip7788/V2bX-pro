@@ -38,13 +38,18 @@ type LinkManager struct {
 	owner *sync.Map
 }
 
-func (m *LinkManager) AddLink(writer *ManagedWriter, reader buf.Reader, conn net.Conn, ip string, counted bool) {
+// AddLink 登记连接；limit > 0 且已有连接数达到 limit 时不登记，返回 false
+func (m *LinkManager) AddLink(writer *ManagedWriter, reader buf.Reader, conn net.Conn, ip string, counted bool, limit int) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if limit > 0 && len(m.links) >= limit {
+		return false
+	}
 	if m.owner != nil && len(m.key) > 0 {
 		m.owner.Store(m.key, m)
 	}
 	m.links[writer] = managedLink{reader: reader, conn: conn, ip: ip, counted: counted}
+	return true
 }
 
 // IPs 返回计入在线设备的活跃连接来源 IP（去重）
