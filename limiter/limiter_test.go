@@ -378,4 +378,105 @@ func TestBanBitTorrentRejectsUser(t *testing.T) {
 	if _, reject := lim.CheckLimit(banned, "1.1.1.1", true, true); reject {
 		t.Fatal("expired ban should be lifted")
 	}
+
+	lim.BanBitTorrent(banned)
+	if _, reject := lim.CheckLimit(banned, "1.1.1.1", true, true); !reject {
+		t.Fatal("re-banned user should be rejected")
+	}
+	if err := lim.UpdateRule(&panel.Rules{AllowBT: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, reject := lim.CheckLimit(banned, "1.1.1.1", true, true); reject {
+		t.Fatal("AllowBT=true should immediately lift active BT ban")
+	}
+}
+
+func TestBucketHolderUpdatesAndExpiresLive(t *testing.T) {
+	Init()
+	lim := AddLimiter("tag", &conf.LimitConfig{}, []panel.UserInfo{
+		{Id: 1, Uuid: "u1", SpeedLimit: 100},
+	}, map[int]int{})
+	taguuid := format.UserTag("tag", "u1")
+	holder := lim.SpeedBucketHolder(taguuid)
+
+	full := int64(100) * 1000000 / 8
+	if b := holder.Current(); b == nil || b.Capacity() != full {
+		t.Fatalf("initial bucket capacity = %v, want %d", b, full)
+	}
+
+	if err := lim.UpdateDynamicSpeedLimit("tag", "u1", 20, time.Now().Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if b := holder.Current(); b == nil || b.Capacity() != int64(20)*1000000/8 {
+		t.Fatalf("holder should switch to 20Mbps immediately, got %v", b)
+	}
+
+	// 模拟动态限速已到期：长连接不重建也能通过 Current() 自动恢复到 100Mbps
+	lim.userInfoMu.Lock()
+	v, _ := lim.userLimitInfo.Load(taguuid)
+	info := *v.(*UserLimitInfo)
+	info.ExpireTime = time.Now().Add(-time.Second).Unix()
+	lim.userLimitInfo.Store(taguuid, &info)
+	lim.syncSpeedBucketLocked(taguuid, &info, time.Now().Unix()-10)
+	lim.userInfoMu.Unlock()
+
+	if b := holder.Current(); b == nil || b.Capacity() != full {
+		t.Fatalf("expired dynamic limit should restore full 100Mbps on holder, got %v", b)
+	}
+}
+
+func TestInheritFromPreservesStateAcrossReload(t *testing.T) {
+	Init()
+	oldLim := AddLimiter("old", &conf.LimitConfig{}, []panel.UserInfo{
+		{Id: 1, Uuid: "u1", SpeedLimit: 100, DeviceLimit: 1},
+	}, map[int]int{})
+	if _, reject := oldLim.CheckLimit(format.UserTag("old", "u1"), "1.1.1.1", true, true); reject {
+		t.Fatal("first ip should pass")
+	}
+	if err := oldLim.UpdateDynamicSpeedLimit("old", "u1", 25, time.Now().Add(5*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := oldLim.UpdateSpeedShare("old", "u1", 2, time.Now().Add(5*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	oldLim.BanBitTorrent(format.UserTag("old", "u1"))
+
+	newLim := AddLimiter("new", &conf.LimitConfig{}, []panel.UserInfo{
+		{Id: 1, Uuid: "u1", SpeedLimit: 100, DeviceLimit: 1},
+	}, map[int]int{})
+	newLim.InheritFrom("old", "new", oldLim)
+
+	if !newLim.IsDynamicLimited("new", "u1") {
+		t.Fatal("dynamic speed limit should be inherited across reload")
+	}
+	if b := newLim.SpeedBucketHolder(format.UserTag("new", "u1")).Current(); b == nil || b.Capacity() != int64(25)*1000000/8 {
+		t.Fatalf("inherited bucket mismatch: %v", b)
+	}
+	if _, reject := newLim.CheckLimit(format.UserTag("new", "u1"), "1.1.1.1", true, true); !reject {
+		t.Fatal("BT ban should be inherited across reload")
+	}
+	newLim.btBanned.Clear()
+	if _, reject := newLim.CheckLimit(format.UserTag("new", "u1"), "2.2.2.2", true, true); !reject {
+		t.Fatal("device state should be inherited across reload")
+	}
+}
+
+func TestAliveIPsPrefixChangeReconciled(t *testing.T) {
+	SetIPv4Prefix(32)
+	defer SetIPv4Prefix(32)
+	Init()
+	lim := AddLimiter("tagp", &conf.LimitConfig{}, []panel.UserInfo{
+		{Id: 1, Uuid: "u1", DeviceLimit: 1},
+	}, map[int]int{})
+	// SetAliveIPs 先于 SetIPv4Prefix(24) 到达
+	lim.SetAliveIPs(map[int][]string{1: {"112.96.84.14"}}, time.Now())
+	SetIPv4Prefix(24)
+
+	taguuid := format.UserTag("tagp", "u1")
+	if _, reject := lim.CheckLimit(taguuid, "112.96.84.200", true, true); reject {
+		t.Fatal("same /24 device should pass after prefix updated")
+	}
+	if _, reject := lim.CheckLimit(taguuid, "112.96.85.1", true, true); !reject {
+		t.Fatal("different /24 device should be rejected")
+	}
 }

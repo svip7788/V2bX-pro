@@ -385,8 +385,17 @@ func (c *Controller) processWSEvent(evt panel.WSEvent) {
 			return
 		}
 		for _, u := range data.Users {
+			if c.limiter.IsWhitelisted(u.ID) {
+				continue
+			}
 			uuid, ok := c.uidToUUID[u.ID]
-			if !ok || u.LimitSpeed <= 0 || u.LimitTime <= 0 {
+			if !ok {
+				continue
+			}
+			if u.LimitSpeed <= 0 || u.LimitTime <= 0 {
+				if err := c.limiter.UpdateDynamicSpeedLimit(c.tag, uuid, 0, time.Time{}); err == nil {
+					log.WithFields(log.Fields{"tag": c.tag, "uid": u.ID}).Info("Global dynamic speed limit lifted")
+				}
 				continue
 			}
 			closed, err := c.limitUserSpeed(uuid, u.LimitSpeed, u.LimitTime)
@@ -410,10 +419,14 @@ func (c *Controller) processWSEvent(evt panel.WSEvent) {
 		}
 		for _, u := range data.Users {
 			uuid, ok := c.uidToUUID[u.ID]
-			if !ok || u.TTL <= 0 {
+			if !ok || (u.Divisor > 1 && u.TTL <= 0) {
 				continue
 			}
-			tightened, err := c.limiter.UpdateSpeedShare(c.tag, uuid, u.Divisor, time.Now().Add(time.Duration(u.TTL)*time.Second))
+			var expire time.Time
+			if u.TTL > 0 {
+				expire = time.Now().Add(time.Duration(u.TTL) * time.Second)
+			}
+			tightened, err := c.limiter.UpdateSpeedShare(c.tag, uuid, u.Divisor, expire)
 			if err != nil || !tightened {
 				continue
 			}

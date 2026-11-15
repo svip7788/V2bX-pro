@@ -53,7 +53,7 @@ func contentSniffers() []protocolSnifferWithMetadata {
 		{func(c context.Context, b []byte) (SniffResult, error) { return tls.SniffTLS(b) }, false, net.Network_TCP},
 		{func(c context.Context, b []byte) (SniffResult, error) { return bittorrent.SniffBittorrent(b) }, false, net.Network_TCP},
 		{func(c context.Context, b []byte) (SniffResult, error) { return quic.SniffQUIC(b) }, false, net.Network_UDP},
-		{func(c context.Context, b []byte) (SniffResult, error) { return bittorrent.SniffUTP(b) }, false, net.Network_UDP},
+		{sniffUTP, false, net.Network_UDP},
 		{sniffBitTorrentUDP, false, net.Network_UDP},
 	}
 }
@@ -62,15 +62,38 @@ var errUnknownContent = errors.New("unknown content")
 
 var errNotBitTorrent = errors.New("not bittorrent")
 
+type btSniffResult struct {
+	domain string
+}
+
+func (btSniffResult) Protocol() string { return "bittorrent" }
+func (r btSniffResult) Domain() string  { return r.domain }
+
+type utpSniffResult struct{}
+
+func (utpSniffResult) Protocol() string     { return "bittorrent" }
+func (utpSniffResult) Domain() string       { return "" }
+func (utpSniffResult) IsWeakBitTorrent() bool { return true }
+
 func sniffHTTPTracker(_ context.Context, b []byte) (SniffResult, error) {
 	ok, needMore := isHTTPTrackerRequest(b)
 	if ok {
-		return &bittorrent.SniffHeader{}, nil
+		return btSniffResult{domain: extractHTTPHost(b)}, nil
 	}
 	if needMore {
 		return nil, common.ErrNoClue
 	}
 	return nil, errNotBitTorrent
+}
+
+func sniffUTP(_ context.Context, b []byte) (SniffResult, error) {
+	if _, err := bittorrent.SniffUTP(b); err != nil {
+		return nil, err
+	}
+	if !isStrictUTPSyn(b) {
+		return nil, errNotBitTorrent
+	}
+	return utpSniffResult{}, nil
 }
 
 // sniffBitTorrentUDP covers DHT and UDP tracker packets, which stay plaintext under MSE/PE.
@@ -158,10 +181,38 @@ func (c compositeResult) ProtocolForDomainResult() string {
 	return c.domainResult.Protocol()
 }
 
+func (c compositeResult) EffectiveProtocol() string {
+	return effectiveProtocol(c.protocolResult)
+}
+
+func (c compositeResult) IsWeakBitTorrent() bool {
+	return isWeakBitTorrent(c.protocolResult)
+}
+
 type SnifferResultComposite interface {
 	ProtocolForDomainResult() string
 }
 
 type SnifferIsProtoSubsetOf interface {
 	IsProtoSubsetOf(protocolName string) bool
+}
+
+func effectiveProtocol(r SniffResult) string {
+	if r == nil {
+		return ""
+	}
+	if ep, ok := r.(interface{ EffectiveProtocol() string }); ok {
+		return ep.EffectiveProtocol()
+	}
+	return r.Protocol()
+}
+
+func isWeakBitTorrent(r SniffResult) bool {
+	if r == nil {
+		return false
+	}
+	if wb, ok := r.(interface{ IsWeakBitTorrent() bool }); ok {
+		return wb.IsWeakBitTorrent()
+	}
+	return false
 }

@@ -1,11 +1,10 @@
-// Package sshguard 识别经节点做 SSH 爆破/扫描的用户，只封禁其 22 端口出站。
+// Package sshguard 识别经节点做 SSH 爆破/扫描的用户，区分单目标高频与多目标扫描：
 //
-// 正常使用（登录自己的几台服务器、git over ssh）远低于阈值；
-// 爆破工具会在短时间内大量重连同一目标，扫描则会连大量不同目标。
-//
-// 分级处罚：首次命中只封 22 端口不上报；24 小时内再次命中且涉及至少
-// reportMinHosts 个不同目标，或 10 分钟内连接超过 severeHosts 个不同目标才上报面板封号。
-// 只反复连同一两台机器（含断线自动重连的隧道脚本）只封端口不封号。
+//   - 正常使用（AI 工具、运维脚本、CI 等对少数服务器高频建连）放宽阈值；
+//   - 仅单目标超出频率限制时，只对该目标冷却 2 分钟，不封整个 22 端口、不升级 24 小时、不上报面板；
+//   - 多目标扫描（10 分钟超过 hostsLimit 个不同目标，或短时多目标并发爆破）才封全用户 22 端口：
+//     首次封 1 小时不上报，24 小时内再次命中且涉及至少 reportMinHosts 个不同目标，或 10 分钟内
+//     连接超过 severeHosts 个不同目标时才上报面板封号。
 package sshguard
 
 import (
@@ -16,18 +15,21 @@ import (
 )
 
 const (
-	burstWindow    = time.Minute
-	burstLimit     = 20 // 1 分钟内新建 22 连接数
-	targetWindow   = 10 * time.Minute
-	perHostLimit   = 30 // 10 分钟内连同一目标次数
-	hostsLimit     = 10 // 10 分钟内不同目标数
-	severeHosts    = 30 // 10 分钟内不同目标数超过即上报，封禁期间继续统计
-	reportMinHosts = 3  // 再次命中时窗口内不同目标数达到才上报
-	firstBan       = time.Hour
-	repeatBan      = 24 * time.Hour
-	repeatWindow   = 24 * time.Hour
-	maxEntries     = 256
-	sweepInterval  = 5 * time.Minute
+	burstWindow        = time.Minute
+	perHostBurstLimit  = 60              // 1 分钟内连同一目标上限，超出仅对该目标短冷却
+	scanBurstLimit     = 120             // 1 分钟内多目标新建 22 连接上限
+	scanBurstMinHosts  = 3               // 触发全局突发封禁的最少不同目标数
+	targetWindow       = 10 * time.Minute
+	perHostLimit       = 300             // 10 分钟内连同一目标上限，超出仅对该目标短冷却
+	hostsLimit         = 15              // 10 分钟内不同目标数上限
+	severeHosts        = 30              // 10 分钟内不同目标数超过即上报，封禁期间继续统计
+	reportMinHosts     = 5               // 再次命中时窗口内不同目标数达到才上报
+	hostCooldown       = 2 * time.Minute // 单目标高频冷却时间
+	firstBan           = time.Hour
+	repeatBan          = 24 * time.Hour
+	repeatWindow       = 24 * time.Hour
+	maxEntries         = 2048
+	sweepInterval      = 5 * time.Minute
 )
 
 // Port 受保护的目标端口
@@ -45,13 +47,14 @@ type hit struct {
 }
 
 type state struct {
-	mu       sync.Mutex
-	hits     []hit
-	until    time.Time
-	lastBan  time.Time
-	lastSeen time.Time
-	reported bool                 // 本轮封禁已上报
-	banHosts map[string]time.Time // 封禁期间尝试的不同目标，最多 severeHosts+1 个，上报后释放
+	mu            sync.Mutex
+	hits          []hit
+	hostCooldowns map[string]time.Time // 单目标短冷却截止时间
+	until         time.Time
+	lastBan       time.Time
+	lastSeen      time.Time
+	reported      bool                 // 本轮封禁已上报
+	banHosts      map[string]time.Time // 封禁期间尝试的不同目标，最多 severeHosts+1 个，上报后释放
 }
 
 var (
@@ -72,9 +75,16 @@ type Result struct {
 // localSuffix 局域网主机名后缀，客户端全局/TUN 模式误把内网 ssh 送进代理时会出现
 var localSuffix = []string{".local", ".lan", ".internal", ".localdomain", ".home", ".home.arpa", ".corp"}
 
+func normalizeHost(host string) string {
+	host = strings.ToLower(strings.TrimSuffix(strings.Trim(host, "[]"), "."))
+	if ip, err := netip.ParseAddr(host); err == nil {
+		return ip.Unmap().String()
+	}
+	return host
+}
+
 // isExempt 代码平台、内网地址、本地主机名不可能是被爆破的外部目标，不计数
 func isExempt(host string) bool {
-	host = strings.ToLower(strings.TrimSuffix(strings.Trim(host, "[]"), "."))
 	if ip, err := netip.ParseAddr(host); err == nil {
 		ip = ip.Unmap()
 		return ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() ||
@@ -102,7 +112,8 @@ func Check(key, host string) Result {
 }
 
 func check(key, host string, now time.Time) Result {
-	if key == "" || isExempt(host) {
+	host = normalizeHost(host)
+	if key == "" || host == "" || isExempt(host) {
 		return Result{}
 	}
 	sweepOnce.Do(func() { go sweep() })
@@ -131,6 +142,15 @@ func check(key, host string, now time.Time) Result {
 		return r
 	}
 
+	for h, until := range s.hostCooldowns {
+		if !now.Before(until) {
+			delete(s.hostCooldowns, h)
+		}
+	}
+	if until, ok := s.hostCooldowns[host]; ok {
+		return Result{Reject: true, Until: until}
+	}
+
 	keep := s.hits[:0]
 	for _, h := range s.hits {
 		if now.Sub(h.at) < targetWindow {
@@ -138,59 +158,89 @@ func check(key, host string, now time.Time) Result {
 		}
 	}
 	s.hits = append(keep, hit{at: now, host: host})
-	// 未封禁时 1 分钟超过 burstLimit 次即封，10 分钟内最多约 10*burstLimit 条，上限不会淘汰窗口内数据
 	if len(s.hits) > maxEntries {
 		s.hits = s.hits[len(s.hits)-maxEntries:]
 	}
-	burst, same, hosts := count(s.hits, host, now)
+	burst, sameBurst, same, hosts := count(s.hits, host, now)
 
+	// 优先检查多目标扫描或跨多目标的高频爆破
 	reason := ""
 	switch {
-	case burst > burstLimit:
-		reason = "1 分钟内新建 SSH 连接过多"
-	case same > perHostLimit:
-		reason = "10 分钟内反复连接同一 SSH 目标"
 	case hosts > hostsLimit:
 		reason = "10 分钟内连接过多不同 SSH 目标"
-	default:
-		return Result{}
+	case burst > scanBurstLimit && hosts >= scanBurstMinHosts:
+		reason = "1 分钟内多目标新建 SSH 连接过多"
 	}
-	repeat := !s.lastBan.IsZero() && now.Sub(s.lastBan) < repeatWindow
-	d := firstBan
-	if repeat {
-		d = repeatBan
-		reason = "24 小时内再次触发：" + reason
-	}
-	report := repeat && hosts >= reportMinHosts
-	s.until = now.Add(d)
-	s.lastBan = now
-	s.reported = report
-	s.hits = nil
-	s.banHosts = nil
-	if !report {
-		s.banHosts = make(map[string]time.Time, severeHosts+1)
-		for _, h := range keep {
-			s.banHosts[h.host] = h.at
+	if reason != "" {
+		repeat := !s.lastBan.IsZero() && now.Sub(s.lastBan) < repeatWindow
+		d := firstBan
+		if repeat {
+			d = repeatBan
+			reason = "24 小时内再次触发：" + reason
 		}
-		s.banHosts[host] = now
+		report := repeat && hosts >= reportMinHosts
+		s.until = now.Add(d)
+		s.lastBan = now
+		s.reported = report
+		s.hits = nil
+		s.hostCooldowns = nil
+		s.banHosts = nil
+		if !report {
+			s.banHosts = make(map[string]time.Time, severeHosts+1)
+			for _, h := range keep {
+				s.banHosts[h.host] = h.at
+			}
+			s.banHosts[host] = now
+		}
+		return Result{Reject: true, NewBan: true, Report: report, Until: s.until, Reason: reason}
 	}
-	return Result{Reject: true, NewBan: true, Report: report, Until: s.until, Reason: reason}
+
+	// 单目标高频只冷却该目标，不封全用户 22 端口，不计入累犯，不上报面板
+	var cooldownReason string
+	switch {
+	case sameBurst > perHostBurstLimit:
+		cooldownReason = "1 分钟内连接同一 SSH 目标过于频繁，临时冷却"
+	case same > perHostLimit:
+		cooldownReason = "10 分钟内连接同一 SSH 目标过于频繁，临时冷却"
+	}
+	if cooldownReason != "" {
+		if s.hostCooldowns == nil {
+			s.hostCooldowns = make(map[string]time.Time)
+		}
+		until := now.Add(hostCooldown)
+		s.hostCooldowns[host] = until
+		// 保留一条当前目标记录维持 hosts 计数，清理同目标历史以免冷却结束立刻再触发
+		filtered := s.hits[:0]
+		for _, h := range s.hits {
+			if h.host != host {
+				filtered = append(filtered, h)
+			}
+		}
+		s.hits = append(filtered, hit{at: now, host: host})
+		return Result{Reject: true, NewBan: true, Until: until, Reason: cooldownReason}
+	}
+
+	return Result{}
 }
 
 const severeReason = "10 分钟内扫描过多不同 SSH 目标"
 
-func count(hits []hit, host string, now time.Time) (burst, same, hosts int) {
+func count(hits []hit, host string, now time.Time) (burst, sameBurst, same, hosts int) {
 	seen := make(map[string]struct{}, 16)
 	for _, h := range hits {
-		if now.Sub(h.at) < burstWindow {
+		inBurst := now.Sub(h.at) < burstWindow
+		if inBurst {
 			burst++
 		}
 		if h.host == host {
 			same++
+			if inBurst {
+				sameBurst++
+			}
 		}
 		seen[h.host] = struct{}{}
 	}
-	return burst, same, len(seen)
+	return burst, sameBurst, same, len(seen)
 }
 
 func sweep() {

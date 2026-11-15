@@ -203,10 +203,11 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, network net.Network) (*
 			return nil, nil, nil, errors.New("get limiter ", sessionInbound.Tag, " error: ", err)
 		}
 		// Speed Limit and Device Limit
+		ip, counted := deviceIP(sessionInbound)
 		w, reject := limit.CheckLimit(user.Email,
-			sessionInbound.Source.Address.IP().String(),
+			ip,
 			network == net.Network_TCP,
-			sessionInbound.Source.Network == net.Network_TCP)
+			counted)
 		if reject {
 			errors.LogInfo(ctx, "Limited ", user.Email, " by conn or ip")
 			common.Close(outboundLink.Writer)
@@ -220,7 +221,6 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, network net.Network) (*
 			writer:  uplinkWriter,
 			manager: lm,
 		}
-		ip, counted := deviceIP(sessionInbound)
 		if connLimit := limit.UserConnLimit(user.Email); !lm.AddLink(managedWriter, outboundLink.Reader, sessionInbound.Conn, ip, counted, connLimit) {
 			errors.LogInfo(ctx, "Limited ", user.Email, " by conn count")
 			reportConnLimited(sessionInbound, limit, connLimit)
@@ -240,8 +240,9 @@ func (d *DefaultDispatcher) getLink(ctx context.Context, network net.Network) (*
 		inboundLink.Writer = managedWriter
 		if w != nil {
 			sessionInbound.CanSpliceCopy = 3
-			inboundLink.Writer = rate.NewRateLimitWriter(inboundLink.Writer, w)
-			outboundLink.Writer = rate.NewRateLimitWriter(outboundLink.Writer, w)
+			holder := limit.SpeedBucketHolder(user.Email)
+			inboundLink.Writer = rate.NewDynamicRateLimitWriter(ctx, inboundLink.Writer, holder.Current)
+			outboundLink.Writer = rate.NewDynamicRateLimitWriter(ctx, outboundLink.Writer, holder.Current)
 		}
 		t := d.getOrCreateCounter(sessionInbound.Tag)
 
@@ -319,7 +320,7 @@ func (d *DefaultDispatcher) Dispatch(ctx context.Context, destination net.Destin
 		return nil, err
 	}
 	if !sniffingRequest.Enabled {
-		go d.routedDispatch(ctx, outbound, destination, l, "")
+		go d.routedDispatch(ctx, outbound, destination, l, "", false)
 	} else {
 		go func() {
 			cReader := &cachedReader{
@@ -327,8 +328,12 @@ func (d *DefaultDispatcher) Dispatch(ctx context.Context, destination net.Destin
 			}
 			outbound.Reader = cReader
 			result, err := sniffer(ctx, cReader, sniffingRequest.MetadataOnly, destination.Network)
+			var effectiveProto string
+			var weakBT bool
 			if err == nil {
 				content.Protocol = result.Protocol()
+				effectiveProto = effectiveProtocol(result)
+				weakBT = isWeakBitTorrent(result)
 			}
 			if err == nil && d.shouldOverride(ctx, result, sniffingRequest, destination) {
 				domain := result.Domain()
@@ -348,7 +353,7 @@ func (d *DefaultDispatcher) Dispatch(ctx context.Context, destination net.Destin
 					ob.Target = destination
 				}
 			}
-			d.routedDispatch(ctx, outbound, destination, l, content.Protocol)
+			d.routedDispatch(ctx, outbound, destination, l, effectiveProto, weakBT)
 		}()
 	}
 	return inbound, nil
@@ -390,10 +395,11 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 			return errors.New("get limiter ", sessionInbound.Tag, " error: ", err)
 		}
 		// Speed Limit and Device Limit
+		ip, counted := deviceIP(sessionInbound)
 		w, reject := limit.CheckLimit(user.Email,
-			sessionInbound.Source.Address.IP().String(),
+			ip,
 			destination.Network == net.Network_TCP,
-			sessionInbound.Source.Network == net.Network_TCP)
+			counted)
 		if reject {
 			errors.LogInfo(ctx, "Limited ", user.Email, " by conn or ip")
 			common.Close(outbound.Writer)
@@ -406,10 +412,6 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 			manager: lm,
 		}
 		outbound.Writer = managedWriter
-		if w != nil {
-			sessionInbound.CanSpliceCopy = 3
-			outbound.Writer = rate.NewRateLimitWriter(outbound.Writer, w)
-		}
 		t := d.getOrCreateCounter(sessionInbound.Tag)
 
 		ts := t.GetCounter(user.Email)
@@ -418,7 +420,12 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 			Reader:  &buf.TimeoutWrapperReader{Reader: outbound.Reader},
 			Counter: &ts.UpCounter,
 		}
-		ip, counted := deviceIP(sessionInbound)
+		if w != nil {
+			sessionInbound.CanSpliceCopy = 3
+			holder := limit.SpeedBucketHolder(user.Email)
+			outbound.Writer = rate.NewDynamicRateLimitWriter(ctx, outbound.Writer, holder.Current)
+			outbound.Reader = rate.NewDynamicRateLimitReader(ctx, outbound.Reader.(buf.TimeoutReader), holder.Current)
+		}
 		if connLimit := limit.UserConnLimit(user.Email); !lm.AddLink(managedWriter, outbound.Reader, sessionInbound.Conn, ip, counted, connLimit) {
 			errors.LogInfo(ctx, "Limited ", user.Email, " by conn count")
 			reportConnLimited(sessionInbound, limit, connLimit)
@@ -435,15 +442,19 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 
 	sniffingRequest := content.SniffingRequest
 	if !sniffingRequest.Enabled {
-		d.routedDispatch(ctx, outbound, destination, limit, "")
+		d.routedDispatch(ctx, outbound, destination, limit, "", false)
 	} else {
 		cReader := &cachedReader{
 			reader: outbound.Reader.(buf.TimeoutReader),
 		}
 		outbound.Reader = cReader
 		result, err := sniffer(ctx, cReader, sniffingRequest.MetadataOnly, destination.Network)
+		var effectiveProto string
+		var weakBT bool
 		if err == nil {
 			content.Protocol = result.Protocol()
+			effectiveProto = effectiveProtocol(result)
+			weakBT = isWeakBitTorrent(result)
 		}
 		if err == nil && d.shouldOverride(ctx, result, sniffingRequest, destination) {
 			domain := result.Domain()
@@ -463,7 +474,7 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 				ob.Target = destination
 			}
 		}
-		d.routedDispatch(ctx, outbound, destination, limit, content.Protocol)
+		d.routedDispatch(ctx, outbound, destination, limit, effectiveProto, weakBT)
 	}
 
 	return nil
@@ -528,7 +539,7 @@ func sniffer(ctx context.Context, cReader *cachedReader, metadataOnly bool, netw
 	return contentResult, contentErr
 }
 
-func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.Link, destination net.Destination, l *limiter.Limiter, protocol string) {
+func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.Link, destination net.Destination, l *limiter.Limiter, protocol string, weakBT bool) {
 	outbounds := session.OutboundsFromContext(ctx)
 	ob := outbounds[len(outbounds)-1]
 
@@ -543,24 +554,29 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 		}
 		if l != nil && protocol == bittorrentProtocol && !l.AllowBitTorrent() {
 			email := sessionInbound.User.Email
-			newly, banFor := l.BanBitTorrent(email)
-			closed := 0
-			if v, ok := d.LinkManagers.Load(email); ok {
-				closed = v.(*LinkManager).CloseAll()
+			if weakBT && !confirmUTP(email) {
+				// 单次或偶发 uTP 疑似特征不立即封禁或上报，避免非 BT UDP 流量误封
+				protocol = ""
+			} else {
+				newly, banFor := l.BanBitTorrent(email)
+				closed := 0
+				if v, ok := d.LinkManagers.Load(email); ok {
+					closed = v.(*LinkManager).CloseAll()
+				}
+				if newly {
+					llog.WithFields(llog.Fields{
+						"user":   email,
+						"ip":     sessionInbound.Source.Address.String(),
+						"dest":   destination.String(),
+						"ban":    banFor.String(),
+						"closed": closed,
+					}).Warn("BitTorrent detected, user banned on this node")
+				}
+				reportViolation(sessionInbound, l, violation.KindBT, destination.NetAddr(), "检测到 BitTorrent 协议")
+				common.Close(link.Writer)
+				common.Interrupt(link.Reader)
+				return
 			}
-			if newly {
-				llog.WithFields(llog.Fields{
-					"user":   email,
-					"ip":     sessionInbound.Source.Address.String(),
-					"dest":   destination.String(),
-					"ban":    banFor.String(),
-					"closed": closed,
-				}).Warn("BitTorrent detected, user banned on this node")
-			}
-			reportViolation(sessionInbound, l, violation.KindBT, destination.NetAddr(), "检测到 BitTorrent 协议")
-			common.Close(link.Writer)
-			common.Interrupt(link.Reader)
-			return
 		}
 		if l != nil {
 			var destStr string
@@ -793,9 +809,12 @@ func (d *DefaultDispatcher) getOrCreateCounter(tag string) *counter.TrafficCount
 	return c.(*counter.TrafficCounter)
 }
 
-// deviceIP 返回来源 IP，以及是否计入在线设备：与 CheckLimit 的 noSSUDP 条件一致，只有 TCP 来源做设备数检查
+// deviceIP 返回来源 IP，以及是否计入在线设备：TCP 来源及有状态 QUIC/连接会话（如 Hysteria2、TUIC）均做设备数检查
 func deviceIP(in *session.Inbound) (string, bool) {
-	return in.Source.Address.IP().String(), in.Source.Network == net.Network_TCP
+	if in == nil || in.Source.Address == nil || !in.Source.Address.Family().IsIP() {
+		return "", false
+	}
+	return in.Source.Address.IP().String(), in.Source.Network == net.Network_TCP || in.Conn != nil
 }
 
 func (d *DefaultDispatcher) getOrCreateLinkManager(email string) *LinkManager {

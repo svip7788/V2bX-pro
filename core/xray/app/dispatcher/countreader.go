@@ -35,3 +35,9 @@ func (c *CounterReader) ReadMultiBuffer() (buf.MultiBuffer, error) {
 	}
 	return mb, nil
 }
+
+func (c *CounterReader) Interrupt() {
+	if i, ok := c.Reader.(interface{ Interrupt() }); ok {
+		i.Interrupt()
+	}
+}

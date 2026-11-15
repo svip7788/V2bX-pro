@@ -72,6 +72,7 @@ type ipAddressInRangeOpt struct {
 type DNSThenOthersSniffResult struct {
 	domainName           string
 	protocolOriginalName string
+	weakBT               bool
 }
 
 func (f DNSThenOthersSniffResult) IsProtoSubsetOf(protocolName string) bool {
@@ -84,6 +85,14 @@ func (DNSThenOthersSniffResult) Protocol() string {
 
 func (f DNSThenOthersSniffResult) Domain() string {
 	return f.domainName
+}
+
+func (f DNSThenOthersSniffResult) EffectiveProtocol() string {
+	return f.protocolOriginalName
+}
+
+func (f DNSThenOthersSniffResult) IsWeakBitTorrent() bool {
+	return f.weakBT
 }
 
 func newFakeDNSThenOthers(ctx context.Context, fakeDNSSniffer protocolSnifferWithMetadata, others []protocolSnifferWithMetadata) (
@@ -104,7 +113,11 @@ func newFakeDNSThenOthers(ctx context.Context, fakeDNSSniffer protocolSnifferWit
 					for _, v := range others {
 						if v.metadataSniffer || bytes != nil {
 							if result, err := v.protocolSniffer(ctx, bytes); err == nil {
-								return DNSThenOthersSniffResult{domainName: result.Domain(), protocolOriginalName: result.Protocol()}, nil
+								return DNSThenOthersSniffResult{
+									domainName:           result.Domain(),
+									protocolOriginalName: effectiveProtocol(result),
+									weakBT:               isWeakBitTorrent(result),
+								}, nil
 							}
 						}
 					}

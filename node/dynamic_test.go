@@ -156,4 +156,79 @@ func TestGlobalDynamicSpeedLimit(t *testing.T) {
 	if !c.limiter.IsDynamicLimited(tag, "u1") {
 		t.Fatal("speed.limit event should limit u1")
 	}
+	// 下发 0 立即解除
+	c.processWSEvent(panel.WSEvent{Event: "speed.limit", Data: []byte(`{"users":[{"id":1,"limit_speed":0,"limit_time":0}]}`)})
+	if c.limiter.IsDynamicLimited(tag, "u1") {
+		t.Fatal("speed.limit 0 should lift dynamic limit")
+	}
+}
+
+func TestGlobalWhitelistAndShareReset(t *testing.T) {
+	limiter.Init()
+	tag := "dygw"
+	users := []panel.UserInfo{{Id: 1, Uuid: "u1", SpeedLimit: 100}}
+	cfg := conf.LimitConfig{
+		EnableDynamicSpeedLimit: true,
+		DynamicSpeedLimitConfig: &conf.DynamicSpeedLimitConfig{
+			DyLimitTriggerTime:  60,
+			DyLimitTriggerSpeed: 100,
+			DyLimitSpeed:        30,
+			DyLimitTime:         600,
+			DyLimitWhiteUserID:  "1",
+		},
+	}
+	c := &Controller{
+		server:        &fakeCore{},
+		tag:           tag,
+		limiter:       limiter.AddLimiter(tag, &cfg, users, map[int]int{}),
+		info:          &panel.NodeInfo{PushInterval: 60 * time.Second},
+		uidToUUID:     map[int]string{1: "u1"},
+		Options:       &conf.Options{LimitConfig: cfg},
+		dynamicGlobal: true,
+		wsConnected:   func() bool { return true },
+	}
+	c.processWSEvent(panel.WSEvent{Event: "speed.limit", Data: []byte(`{"users":[{"id":1,"limit_speed":20,"limit_time":600}]}`)})
+	if c.limiter.IsDynamicLimited(tag, "u1") {
+		t.Fatal("whitelisted user should not be limited by speed.limit")
+	}
+
+	c.processWSEvent(panel.WSEvent{Event: "speed.share", Data: []byte(`{"users":[{"id":1,"divisor":2,"ttl":60}]}`)})
+	holder := c.limiter.SpeedBucketHolder(tag + "|u1")
+	if b := holder.Current(); b == nil || b.Capacity() != int64(50)*1000000/8 {
+		t.Fatalf("share divisor=2 should set 50Mbps, got %v", b)
+	}
+	c.processWSEvent(panel.WSEvent{Event: "speed.share", Data: []byte(`{"users":[{"id":1,"divisor":1,"ttl":0}]}`)})
+	if b := holder.Current(); b == nil || b.Capacity() != int64(100)*1000000/8 {
+		t.Fatalf("share divisor=1 ttl=0 should immediately restore 100Mbps, got %v", b)
+	}
+}
+
+func TestCheckDynamicSpeedSlackBounded(t *testing.T) {
+	limiter.Init()
+	tag := "dyslack"
+	users := []panel.UserInfo{{Id: 1, Uuid: "u1"}}
+	cfg := conf.LimitConfig{
+		EnableDynamicSpeedLimit: true,
+		DynamicSpeedLimitConfig: &conf.DynamicSpeedLimitConfig{
+			DyLimitTriggerTime:  60,
+			DyLimitTriggerSpeed: 100,
+			DyLimitSpeed:        30,
+			DyLimitTime:         600,
+		},
+	}
+	c := &Controller{
+		server:    &fakeCore{},
+		tag:       tag,
+		limiter:   limiter.AddLimiter(tag, &cfg, users, map[int]int{}),
+		info:      &panel.NodeInfo{PushInterval: 120 * time.Second},
+		uidToUUID: map[int]string{1: "u1"},
+		Options:   &conf.Options{LimitConfig: cfg},
+	}
+	c.traffic = map[string]int64{"u1": 1000 * 1000000 / 8}
+	// 才采样 10 秒时，即使 PushInterval=120s 也不得因过大 slack 提前误触发
+	c.trafficSince = time.Now().Add(-10 * time.Second)
+	c.checkDynamicSpeed()
+	if c.limiter.IsDynamicLimited(tag, "u1") {
+		t.Fatal("should not trigger dynamic speed limit after only 10s sampling")
+	}
 }

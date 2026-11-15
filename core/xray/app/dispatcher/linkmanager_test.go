@@ -1,6 +1,12 @@
 package dispatcher
 
-import "testing"
+import (
+	stdnet "net"
+	"testing"
+
+	"github.com/xtls/xray-core/common/net"
+	"github.com/xtls/xray-core/common/session"
+)
 
 func TestAddLinkRespectsLimit(t *testing.T) {
 	m := &LinkManager{links: make(map[*ManagedWriter]managedLink)}
@@ -17,5 +23,31 @@ func TestAddLinkRespectsLimit(t *testing.T) {
 	}
 	if !m.AddLink(&ManagedWriter{manager: m}, nil, nil, "1.1.1.1", true, 0) {
 		t.Fatal("limit 0 should be unlimited")
+	}
+}
+
+func TestDeviceIPIncludesStatefulQUIC(t *testing.T) {
+	c1, c2 := stdnet.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+
+	ip, counted := deviceIP(&session.Inbound{
+		Source: net.UDPDestination(net.ParseAddress("1.2.3.4"), 1234),
+		Conn:   c1,
+	})
+	if ip != "1.2.3.4" || !counted {
+		t.Fatalf("stateful UDP/QUIC inbound should be counted, got ip=%q counted=%v", ip, counted)
+	}
+
+	ip, counted = deviceIP(&session.Inbound{
+		Source: net.UDPDestination(net.ParseAddress("1.2.3.4"), 1234),
+	})
+	if ip != "1.2.3.4" || counted {
+		t.Fatalf("connectionless UDP inbound should not be counted, got ip=%q counted=%v", ip, counted)
+	}
+
+	ip, counted = deviceIP(&session.Inbound{})
+	if ip != "" || counted {
+		t.Fatalf("missing address should safely return empty/false, got ip=%q counted=%v", ip, counted)
 	}
 }

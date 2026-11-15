@@ -41,7 +41,7 @@ func sshRejected(in *session.Inbound, l *limiter.Limiter, dest net.Destination, 
 	}
 	key := in.User.Email
 	if uid := userUID(in, l); uid > 0 {
-		key = strconv.Itoa(uid)
+		key = in.Tag + "|" + strconv.Itoa(uid)
 	}
 	r := sshguard.Check(key, host)
 	if r.NewBan || r.Report {

@@ -132,6 +132,9 @@ func (l *Limiter) UpdateRule(rule *panel.Rules) error {
 		}
 	}
 	l.allowBT.Store(rule.AllowBT)
+	if rule.AllowBT {
+		l.btBanned.Clear()
+	}
 	l.ruleMu.Lock()
 	l.DomainRules = rules
 	l.ProtocolRules = rule.Protocol

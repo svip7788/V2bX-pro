@@ -162,8 +162,9 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 		c.applyDynamicSpeedLimit(newN)
 		c.applyIPWatch(newN)
 		c.applyConnLimit(newN)
-		c.limiter.SetDynamicConfig(&c.LimitConfig)
-		c.resetDynamicTraffic()
+		if c.limiter.SetDynamicConfig(&c.LimitConfig) {
+			c.resetDynamicTraffic()
+		}
 		log.WithField("tag", c.tag).Info("Node policy changed, applied without reload")
 		newN = nil
 	}
@@ -197,6 +198,7 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 		// Update limiter
 		if len(c.Options.Name) == 0 {
 			oldTag := c.tag
+			oldLimiter := c.limiter
 			c.tag = c.buildNodeTag(newN)
 			limiter.DeleteLimiter(oldTag)
 			violation.Unregister(oldTag)
@@ -206,6 +208,7 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 				aliveList = c.aliveMap
 			}
 			l := limiter.AddLimiter(c.tag, &c.LimitConfig, c.userList, aliveList)
+			l.InheritFrom(oldTag, c.tag, oldLimiter)
 			l.SetAliveIPs(c.aliveIPs, c.aliveIPsAt)
 			l.SetExcess(c.excess, c.excessAt)
 			c.limiter = l
@@ -422,10 +425,10 @@ func (c *Controller) checkDynamicSpeed() {
 	if triggerTime <= 0 {
 		triggerTime = 60
 	}
-	// 上报由 ticker 驱动但 HTTP 耗时有抖动，留半个上报间隔余量，避免刚好差一点而多等一轮
+	// 上报由 ticker 驱动但 HTTP 耗时有抖动，留小余量避免刚好差几秒而多等一轮；限制上限防止大 PushInterval 吃掉检测窗口
 	var slack time.Duration
-	if c.info != nil {
-		slack = c.info.PushInterval / 2
+	if c.info != nil && c.info.PushInterval > 0 {
+		slack = min(c.info.PushInterval/4, 5*time.Second)
 	}
 	since := time.Since(c.trafficSince)
 	if since+slack < time.Duration(triggerTime)*time.Second {

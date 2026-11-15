@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/netip"
 	"regexp"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -26,27 +27,72 @@ type Limiter struct {
 	ProtocolRules []string
 	SpeedLimit    int
 
-	relayRules    []relayRule
-	dnsRules      []dnsRule
-	ruleMu        sync.RWMutex
-	aliveMu       sync.RWMutex
-	userLimitInfo sync.Map // taguuid -> *UserLimitInfo
-	speedLimiter  sync.Map // taguuid -> *ratelimit.Bucket
-	userDevices   sync.Map // taguuid -> *userDeviceState
-	uuidToUID     sync.Map // uuid -> int
-	aliveList     map[int]int
-	aliveIPs      map[int][]string // 面板 sync.devices 下发的全节点在线 IP，nil 表示只有计数
-	aliveIPsAt    time.Time
-	excess        map[int]map[string]struct{} // 面板裁决的超限设备计数键，拒绝其连接
-	excessAt      time.Time
-	dyWhitelist   map[int]struct{}
-	dyTimeRanges  []timeRange
-	dyConfig      conf.DynamicSpeedLimitConfig
-	dyApplied     bool
-	btBanDuration time.Duration
-	btBanned      sync.Map // taguuid -> int64 (ban expiry, unix nano)
-	allowBT       atomic.Bool
-	connLimit     atomic.Int64 // 节点默认的用户并发连接数上限，面板可热更新
+	relayRules     []relayRule
+	dnsRules       []dnsRule
+	ruleMu         sync.RWMutex
+	aliveMu        sync.RWMutex
+	userInfoMu     sync.Mutex
+	userLimitInfo  sync.Map // taguuid -> *UserLimitInfo
+	speedBuckets   sync.Map // taguuid -> *BucketHolder
+	userDevices    sync.Map // taguuid -> *userDeviceState
+	uuidToUID      sync.Map // uuid -> int
+	aliveList      map[int]int
+	aliveIPs       map[int][]string // 面板 sync.devices 下发的全节点在线 IP，nil 表示只有计数
+	aliveIPsPrefix int
+	aliveIPsAt     time.Time
+	excess         map[int]map[string]struct{} // 面板裁决的超限设备计数键，拒绝其连接
+	excessAt       time.Time
+	dyWhitelist    map[int]struct{}
+	dyTimeRanges   []timeRange
+	dyConfig       conf.DynamicSpeedLimitConfig
+	dyApplied      bool
+	btBanDuration  time.Duration
+	btBanned       sync.Map // taguuid -> int64 (ban expiry, unix nano)
+	allowBT        atomic.Bool
+	connLimit      atomic.Int64 // 节点默认的用户并发连接数上限，面板可热更新
+}
+
+const bucketFillInterval = 50 * time.Millisecond
+
+type speedBucketState struct {
+	bucket   *ratelimit.Bucket
+	expireAt int64
+}
+
+// BucketHolder 持有用户当前的限速桶指针，限速变更或到期时原地切换，现有连接无需重连即可生效
+type BucketHolder struct {
+	state   atomic.Pointer[speedBucketState]
+	refresh func()
+}
+
+// Current 返回当前有效限速桶；临时限速（动态/平分）到期时自动刷新
+func (h *BucketHolder) Current() *ratelimit.Bucket {
+	if h == nil {
+		return nil
+	}
+	s := h.state.Load()
+	if s == nil {
+		return nil
+	}
+	if s.expireAt > 0 && time.Now().Unix() >= s.expireAt {
+		if h.refresh != nil {
+			h.refresh()
+		}
+		s = h.state.Load()
+		if s == nil {
+			return nil
+		}
+	}
+	return s.bucket
+}
+
+func newSmoothBucket(limitMbps int) *ratelimit.Bucket {
+	if limitMbps <= 0 {
+		return nil
+	}
+	limit := int64(limitMbps) * 1000000 / 8
+	quantum := max(1, limit/20)
+	return ratelimit.NewBucketWithQuantum(bucketFillInterval, limit, quantum)
 }
 
 const defaultBTBanDuration = 2 * time.Minute
@@ -75,9 +121,11 @@ func (u *UserLimitInfo) sharedSpeedLimit(now int64) int {
 }
 
 // UpdateSpeedShare 设置用户固定限速的平分份数，返回生效限速是否变低（变低时须断开现有连接才能生效；
-// 变高不断开，新连接自然按新限速）
+// 变高不断开，现有连接通过动态限速桶自动恢复）
 func (l *Limiter) UpdateSpeedShare(tag, uuid string, divisor int, expire time.Time) (bool, error) {
 	key := format.UserTag(tag, uuid)
+	l.userInfoMu.Lock()
+	defer l.userInfoMu.Unlock()
 	v, ok := l.userLimitInfo.Load(key)
 	if !ok {
 		return false, errors.New("not found")
@@ -87,10 +135,11 @@ func (l *Limiter) UpdateSpeedShare(tag, uuid string, divisor int, expire time.Ti
 	info := *old
 	info.ShareDivisor = divisor
 	info.ShareExpire = expire.Unix()
-	if divisor <= 1 {
+	if divisor <= 1 || info.ShareExpire <= now {
 		info.ShareDivisor, info.ShareExpire = 0, 0
 	}
 	l.userLimitInfo.Store(key, &info)
+	l.syncSpeedBucketLocked(key, &info, now)
 	return info.sharedSpeedLimit(now) < old.sharedSpeedLimit(now), nil
 }
 
@@ -237,11 +286,16 @@ func DeleteLimiter(tag string) {
 }
 
 func (l *Limiter) UpdateUser(tag string, added []panel.UserInfo, deleted []panel.UserInfo) {
+	l.userInfoMu.Lock()
+	defer l.userInfoMu.Unlock()
+	now := time.Now().Unix()
 	for i := range deleted {
 		key := format.UserTag(tag, deleted[i].Uuid)
 		l.userLimitInfo.Delete(key)
 		l.userDevices.Delete(key)
-		l.speedLimiter.Delete(key)
+		if v, ok := l.speedBuckets.LoadAndDelete(key); ok {
+			v.(*BucketHolder).state.Store(nil)
+		}
 		l.btBanned.Delete(key)
 		l.uuidToUID.Delete(deleted[i].Uuid)
 		l.aliveMu.Lock()
@@ -249,6 +303,7 @@ func (l *Limiter) UpdateUser(tag string, added []panel.UserInfo, deleted []panel
 		l.aliveMu.Unlock()
 	}
 	for i := range added {
+		key := format.UserTag(tag, added[i].Uuid)
 		ul := &UserLimitInfo{
 			UID:       added[i].Id,
 			ConnLimit: added[i].ConnLimit,
@@ -260,8 +315,9 @@ func (l *Limiter) UpdateUser(tag string, added []panel.UserInfo, deleted []panel
 		if added[i].DeviceLimit != 0 {
 			ul.DeviceLimit = added[i].DeviceLimit
 		}
-		l.userLimitInfo.Store(format.UserTag(tag, added[i].Uuid), ul)
+		l.userLimitInfo.Store(key, ul)
 		l.uuidToUID.Store(added[i].Uuid, added[i].Id)
+		l.syncSpeedBucketLocked(key, ul, now)
 	}
 }
 
@@ -283,14 +339,9 @@ func (l *Limiter) SetConnLimit(n int) {
 // UpdateUserLimit 原地更新固定限速、设备数和连接数，保留动态限速、平分份额和在线设备状态；
 // 返回生效限速变低的 uuid（限速桶在建连时取定，须断开现有连接才能生效）
 func (l *Limiter) UpdateUserLimit(tag string, users []panel.UserInfo) (tightened []string) {
+	l.userInfoMu.Lock()
+	defer l.userInfoMu.Unlock()
 	now := time.Now().Unix()
-	effective := func(u *UserLimitInfo) int {
-		s := u.sharedSpeedLimit(now)
-		if u.DynamicSpeedLimit > 0 && (u.ExpireTime == 0 || u.ExpireTime >= now) {
-			s = determineSpeedLimit(s, u.DynamicSpeedLimit)
-		}
-		return determineSpeedLimit(l.SpeedLimit, s)
-	}
 	for i := range users {
 		key := format.UserTag(tag, users[i].Uuid)
 		info := UserLimitInfo{UID: users[i].Id}
@@ -298,14 +349,15 @@ func (l *Limiter) UpdateUserLimit(tag string, users []panel.UserInfo) (tightened
 		if v, ok := l.userLimitInfo.Load(key); ok {
 			old := v.(*UserLimitInfo)
 			info = *old
-			oldLimit = effective(old)
+			oldLimit = l.effectiveSpeedLimit(old, now)
 		}
 		info.SpeedLimit = users[i].SpeedLimit
 		info.DeviceLimit = users[i].DeviceLimit
 		info.ConnLimit = users[i].ConnLimit
 		l.userLimitInfo.Store(key, &info)
 		l.uuidToUID.Store(users[i].Uuid, users[i].Id)
-		if newLimit := effective(&info); newLimit > 0 && (oldLimit == 0 || newLimit < oldLimit) {
+		l.syncSpeedBucketLocked(key, &info, now)
+		if newLimit := l.effectiveSpeedLimit(&info, now); newLimit > 0 && (oldLimit == 0 || newLimit < oldLimit) {
 			tightened = append(tightened, users[i].Uuid)
 		}
 	}
@@ -320,15 +372,15 @@ func (l *Limiter) IsWhitelisted(uid int) bool {
 	return ok
 }
 
-// SetDynamicConfig 幂等；配置变化时解除已有动态限速，让新参数立即生效。
+// SetDynamicConfig 幂等；配置变化时解除已有动态限速，让新参数立即生效，返回配置是否发生变化。
 // 与 IsWhitelisted/InDynamicLimitTimeRange 须在同一把锁（控制器 runtimeMu）下调用
-func (l *Limiter) SetDynamicConfig(lc *conf.LimitConfig) {
+func (l *Limiter) SetDynamicConfig(lc *conf.LimitConfig) bool {
 	var cur conf.DynamicSpeedLimitConfig
 	if lc.EnableDynamicSpeedLimit && lc.DynamicSpeedLimitConfig != nil {
 		cur = *lc.DynamicSpeedLimitConfig
 	}
 	if l.dyApplied && l.dyConfig == cur {
-		return
+		return false
 	}
 	if l.dyApplied {
 		l.ClearDynamicSpeedLimit()
@@ -336,10 +388,14 @@ func (l *Limiter) SetDynamicConfig(lc *conf.LimitConfig) {
 	l.dyApplied, l.dyConfig = true, cur
 	l.dyWhitelist = parseWhitelist(cur.DyLimitWhiteUserID)
 	l.dyTimeRanges = parseTimeRanges(cur.DyLimitDuration)
+	return true
 }
 
 // ClearDynamicSpeedLimit 立即解除所有用户的动态限速
 func (l *Limiter) ClearDynamicSpeedLimit() {
+	l.userInfoMu.Lock()
+	defer l.userInfoMu.Unlock()
+	now := time.Now().Unix()
 	l.userLimitInfo.Range(func(k, v any) bool {
 		u := v.(*UserLimitInfo)
 		if u.DynamicSpeedLimit == 0 && u.ExpireTime == 0 {
@@ -349,7 +405,7 @@ func (l *Limiter) ClearDynamicSpeedLimit() {
 		info.DynamicSpeedLimit = 0
 		info.ExpireTime = 0
 		l.userLimitInfo.Store(k, &info)
-		l.speedLimiter.Delete(k)
+		l.syncSpeedBucketLocked(k.(string), &info, now)
 		return true
 	})
 }
@@ -370,16 +426,94 @@ func (l *Limiter) IsDynamicLimited(tag, uuid string) bool {
 
 func (l *Limiter) UpdateDynamicSpeedLimit(tag, uuid string, limit int, expire time.Time) error {
 	key := format.UserTag(tag, uuid)
+	l.userInfoMu.Lock()
+	defer l.userInfoMu.Unlock()
 	v, ok := l.userLimitInfo.Load(key)
 	if !ok {
 		return errors.New("not found")
 	}
+	now := time.Now().Unix()
 	old := v.(*UserLimitInfo)
 	info := *old
-	info.DynamicSpeedLimit = limit
-	info.ExpireTime = expire.Unix()
+	if limit <= 0 {
+		info.DynamicSpeedLimit = 0
+		info.ExpireTime = 0
+	} else {
+		info.DynamicSpeedLimit = limit
+		info.ExpireTime = expire.Unix()
+	}
 	l.userLimitInfo.Store(key, &info)
+	l.syncSpeedBucketLocked(key, &info, now)
 	return nil
+}
+
+// InheritFrom 在节点配置变更重建 Limiter 时，继承旧 Limiter 上未过期的动态限速、平分限速、BT 封禁及在线设备状态
+func (l *Limiter) InheritFrom(oldTag, newTag string, old *Limiter) {
+	if old == nil {
+		return
+	}
+	now := time.Now().Unix()
+	nowTime := time.Now()
+
+	l.userInfoMu.Lock()
+	l.userLimitInfo.Range(func(k, v any) bool {
+		newKey := k.(string)
+		uuid := strings.TrimPrefix(newKey, newTag+"|")
+		oldKey := format.UserTag(oldTag, uuid)
+
+		if ov, ok := old.userLimitInfo.Load(oldKey); ok {
+			ou := ov.(*UserLimitInfo)
+			nu := *v.(*UserLimitInfo)
+			changed := false
+			if ou.DynamicSpeedLimit > 0 && (ou.ExpireTime == 0 || ou.ExpireTime > now) {
+				nu.DynamicSpeedLimit = ou.DynamicSpeedLimit
+				nu.ExpireTime = ou.ExpireTime
+				changed = true
+			}
+			if ou.ShareDivisor > 1 && ou.ShareExpire > now {
+				nu.ShareDivisor = ou.ShareDivisor
+				nu.ShareExpire = ou.ShareExpire
+				changed = true
+			}
+			if changed {
+				l.userLimitInfo.Store(newKey, &nu)
+				l.syncSpeedBucketLocked(newKey, &nu, now)
+			}
+		}
+
+		if bv, ok := old.btBanned.Load(oldKey); ok && bv.(int64) > nowTime.UnixNano() {
+			l.btBanned.Store(newKey, bv)
+		}
+
+		if dv, ok := old.userDevices.Load(oldKey); ok {
+			ods := dv.(*userDeviceState)
+			ods.mu.Lock()
+			var copiedCurrent, copiedReported map[string]string
+			if len(ods.current) > 0 {
+				copiedCurrent = make(map[string]string, len(ods.current))
+				for dk, raw := range ods.current {
+					copiedCurrent[dk] = raw
+				}
+			}
+			if len(ods.reported) > 0 {
+				copiedReported = make(map[string]string, len(ods.reported))
+				for dk, raw := range ods.reported {
+					copiedReported[dk] = raw
+				}
+			}
+			uid := ods.uid
+			ods.mu.Unlock()
+			if len(copiedCurrent) > 0 || len(copiedReported) > 0 {
+				l.userDevices.Store(newKey, &userDeviceState{
+					uid:      uid,
+					current:  copiedCurrent,
+					reported: copiedReported,
+				})
+			}
+		}
+		return true
+	})
+	l.userInfoMu.Unlock()
 }
 
 var ipv4Prefix atomic.Int32
@@ -436,34 +570,112 @@ func (l *Limiter) TouchActiveDevices(tag string, active map[string][]string) {
 	}
 }
 
+func (l *Limiter) effectiveSpeedLimit(u *UserLimitInfo, now int64) int {
+	s := u.sharedSpeedLimit(now)
+	if u.DynamicSpeedLimit > 0 && (u.ExpireTime == 0 || u.ExpireTime > now) {
+		s = determineSpeedLimit(s, u.DynamicSpeedLimit)
+	}
+	return determineSpeedLimit(l.SpeedLimit, s)
+}
+
+func (l *Limiter) nextLimitExpiry(u *UserLimitInfo, now int64) int64 {
+	var exp int64
+	if u.DynamicSpeedLimit > 0 && u.ExpireTime > now {
+		exp = u.ExpireTime
+	}
+	if u.ShareDivisor > 1 && u.ShareExpire > now && (exp == 0 || u.ShareExpire < exp) {
+		exp = u.ShareExpire
+	}
+	return exp
+}
+
+func (l *Limiter) getOrCreateBucketHolder(taguuid string) *BucketHolder {
+	if v, ok := l.speedBuckets.Load(taguuid); ok {
+		return v.(*BucketHolder)
+	}
+	h := &BucketHolder{
+		refresh: func() { l.refreshSpeedBucket(taguuid) },
+	}
+	actual, _ := l.speedBuckets.LoadOrStore(taguuid, h)
+	return actual.(*BucketHolder)
+}
+
+// SpeedBucketHolder 返回用户的动态限速桶持有者；建连一次取得，后续长连接可实时感知限速变化与到期恢复
+func (l *Limiter) SpeedBucketHolder(taguuid string) *BucketHolder {
+	h := l.getOrCreateBucketHolder(taguuid)
+	if h.state.Load() == nil {
+		l.refreshSpeedBucket(taguuid)
+	}
+	return h
+}
+
+func (l *Limiter) refreshSpeedBucket(taguuid string) {
+	l.userInfoMu.Lock()
+	defer l.userInfoMu.Unlock()
+	v, ok := l.userLimitInfo.Load(taguuid)
+	if !ok {
+		if hv, ok := l.speedBuckets.Load(taguuid); ok {
+			hv.(*BucketHolder).state.Store(nil)
+		}
+		return
+	}
+	now := time.Now().Unix()
+	u := v.(*UserLimitInfo)
+	cleaned := false
+	info := *u
+	if info.ExpireTime != 0 && info.ExpireTime <= now {
+		info.DynamicSpeedLimit = 0
+		info.ExpireTime = 0
+		cleaned = true
+	}
+	if info.ShareExpire != 0 && info.ShareExpire <= now {
+		info.ShareDivisor = 0
+		info.ShareExpire = 0
+		cleaned = true
+	}
+	if cleaned {
+		l.userLimitInfo.Store(taguuid, &info)
+		u = &info
+	}
+	l.syncSpeedBucketLocked(taguuid, u, now)
+}
+
+// syncSpeedBucketLocked 须持有 l.userInfoMu
+func (l *Limiter) syncSpeedBucketLocked(taguuid string, u *UserLimitInfo, now int64) {
+	h := l.getOrCreateBucketHolder(taguuid)
+	limitMbps := l.effectiveSpeedLimit(u, now)
+	if limitMbps <= 0 {
+		h.state.Store(nil)
+		return
+	}
+	expireAt := l.nextLimitExpiry(u, now)
+	wantCap := int64(limitMbps) * 1000000 / 8
+	if cur := h.state.Load(); cur != nil && cur.bucket != nil && cur.bucket.Capacity() == wantCap {
+		if cur.expireAt == expireAt {
+			return
+		}
+		h.state.Store(&speedBucketState{bucket: cur.bucket, expireAt: expireAt})
+		return
+	}
+	h.state.Store(&speedBucketState{
+		bucket:   newSmoothBucket(limitMbps),
+		expireAt: expireAt,
+	})
+}
+
 func (l *Limiter) CheckLimit(taguuid string, ip string, isTcp bool, noSSUDP bool) (Bucket *ratelimit.Bucket, Reject bool) {
 	key := deviceKey(ip)
-	if l.isBitTorrentBanned(taguuid) {
+	if !l.AllowBitTorrent() && l.isBitTorrentBanned(taguuid) {
 		return nil, true
 	}
-
-	nodeLimit := l.SpeedLimit
-	userLimit := 0
-	deviceLimit := 0
-	var uid int
 
 	v, ok := l.userLimitInfo.Load(taguuid)
 	if !ok {
 		return nil, true
 	}
 	u := v.(*UserLimitInfo)
-	deviceLimit = u.DeviceLimit
-	uid = u.UID
-	now := time.Now().Unix()
-	speedLimit := u.sharedSpeedLimit(now)
-	dynamicExpired := u.ExpireTime != 0 && u.ExpireTime < now
-	if dynamicExpired {
-		userLimit = speedLimit
-	} else if u.DynamicSpeedLimit > 0 {
-		userLimit = determineSpeedLimit(speedLimit, u.DynamicSpeedLimit)
-	} else {
-		userLimit = speedLimit
-	}
+	deviceLimit := u.DeviceLimit
+	uid := u.UID
 
 	// 超限设备的 UDP 也拒绝，否则踢掉 TCP 后仍能走 UDP
 	if deviceLimit > 0 && l.IsExcess(uid, ip) {
@@ -477,34 +689,7 @@ func (l *Limiter) CheckLimit(taguuid string, ip string, isTcp bool, noSSUDP bool
 		}
 	}
 
-	if dynamicExpired {
-		info := *u
-		info.DynamicSpeedLimit = 0
-		info.ExpireTime = 0
-		l.userLimitInfo.Store(taguuid, &info)
-		l.speedLimiter.Delete(taguuid)
-	}
-
-	limit := int64(determineSpeedLimit(nodeLimit, userLimit)) * 1000000 / 8
-	if limit > 0 {
-		if bv, ok := l.speedLimiter.Load(taguuid); ok {
-			b := bv.(*ratelimit.Bucket)
-			if b.Capacity() == limit {
-				return b, false
-			}
-		}
-		bucket := ratelimit.NewBucketWithQuantum(time.Second, limit, limit)
-		if actual, loaded := l.speedLimiter.LoadOrStore(taguuid, bucket); loaded {
-			existing := actual.(*ratelimit.Bucket)
-			if existing.Capacity() == limit {
-				return existing, false
-			}
-		}
-		l.speedLimiter.Store(taguuid, bucket)
-		return bucket, false
-	}
-	l.speedLimiter.Delete(taguuid)
-	return nil, false
+	return l.SpeedBucketHolder(taguuid).Current(), false
 }
 
 // BanBitTorrent bans the user on this node; returns false if the user was already banned.
@@ -562,9 +747,11 @@ func (l *Limiter) MarkOnlineDeviceReported() {
 
 // SetAliveIPs 设置面板下发的全节点在线 IP（uid => ips），at 为收到时间
 func (l *Limiter) SetAliveIPs(devices map[int][]string, at time.Time) {
+	prefix := int(ipv4Prefix.Load())
 	devices = normalizeAliveIPs(devices)
 	l.aliveMu.Lock()
 	l.aliveIPs = devices
+	l.aliveIPsPrefix = prefix
 	l.aliveIPsAt = at
 	l.aliveMu.Unlock()
 }
@@ -646,13 +833,26 @@ func (l *Limiter) getAlive(uid int) (int, []string) {
 		excess = nil
 	}
 	if l.aliveIPs != nil && time.Since(l.aliveIPsAt) <= aliveIPsMaxAge {
+		curPrefix := int(ipv4Prefix.Load())
+		recheck := l.aliveIPsPrefix != curPrefix
 		ips := l.aliveIPs[uid]
 		if ips == nil {
 			ips = []string{}
 		}
-		if len(excess) > 0 {
+		if recheck || len(excess) > 0 {
 			kept := make([]string, 0, len(ips))
+			var seen map[string]struct{}
+			if recheck {
+				seen = make(map[string]struct{}, len(ips))
+			}
 			for _, k := range ips {
+				if recheck {
+					k = deviceKey(k)
+					if _, dup := seen[k]; dup {
+						continue
+					}
+					seen[k] = struct{}{}
+				}
 				if _, ok := excess[k]; !ok {
 					kept = append(kept, k)
 				}
