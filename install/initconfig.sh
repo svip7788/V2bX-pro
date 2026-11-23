@@ -157,7 +157,7 @@ generate_config_file() {
         \"DnsConfigPath\": \"/etc/V2bX/dns.json\",
         \"XrayConnectionConfig\": {
             \"handshake\": 4,
-            \"connIdle\": 30,
+            \"connIdle\": 300,
             \"uplinkOnly\": 2,
             \"downlinkOnly\": 4,
             \"bufferSize\": 32
