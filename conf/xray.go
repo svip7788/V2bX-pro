@@ -43,7 +43,7 @@ func NewXrayConfig() *XrayConfig {
 		RouteConfigPath:    "",
 		ConnectionConfig: &XrayConnectionConfig{
 			Handshake:    4,
-			ConnIdle:     30,
+			ConnIdle:     300,
 			UplinkOnly:   2,
 			DownlinkOnly: 4,
 			BufferSize:   32,
