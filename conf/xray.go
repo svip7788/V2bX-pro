@@ -74,8 +74,8 @@ type FallBackConfigForXray struct {
 func NewXrayOptions() *XrayOptions {
 	return &XrayOptions{
 		EnableProxyProtocol: false,
-		EnableDNS:           false,
-		DNSType:             "AsIs",
+		EnableDNS:           true,
+		DNSType:             "UseIPv4",
 		EnableUot:           false,
 		EnableTFO:           false,
 		DisableIVCheck:      false,

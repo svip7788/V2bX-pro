@@ -19,4 +19,7 @@ func TestXrayDefaultsFavorHighConcurrency(t *testing.T) {
 	if o.DisableSniffing {
 		t.Fatal("expected xray sniffing to be enabled by default")
 	}
+	if !o.EnableDNS || o.DNSType != "UseIPv4" {
+		t.Fatalf("expected default xray outbound DNS strategy UseIPv4, got EnableDNS=%v DNSType=%q", o.EnableDNS, o.DNSType)
+	}
 }
