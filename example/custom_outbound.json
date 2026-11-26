@@ -5,7 +5,7 @@
         "settings": {},
         "streamSettings": {
             "sockopt": {
-                "domainStrategy": "UseIPv4"
+                "domainStrategy": "ForceIPv4"
             }
         }
     },

@@ -75,7 +75,7 @@ func NewXrayOptions() *XrayOptions {
 	return &XrayOptions{
 		EnableProxyProtocol: false,
 		EnableDNS:           true,
-		DNSType:             "UseIPv4",
+		DNSType:             "ForceIPv4",
 		EnableUot:           false,
 		EnableTFO:           false,
 		DisableIVCheck:      false,

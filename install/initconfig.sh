@@ -86,7 +86,7 @@ add_node_config() {
             "EnableDNS": true,
             "EnableUot": true,
             "EnableTFO": $fastopen,
-            "DNSType": "UseIPv4",
+            "DNSType": "ForceIPv4",
             "DisableSniffing": false,
             "CertConfig": {
                 "CertMode": "$certmode",
@@ -192,8 +192,11 @@ EOF
     {
         "tag": "IPv4_out",
         "protocol": "freedom",
-        "settings": {
-            "domainStrategy": "UseIPv4"
+        "settings": {},
+        "streamSettings": {
+            "sockopt": {
+                "domainStrategy": "ForceIPv4"
+            }
         }
     },
     {

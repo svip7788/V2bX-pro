@@ -69,7 +69,7 @@ func TestDefaultDNSServersPreferLocalResolver(t *testing.T) {
 	}
 }
 
-func TestBuildOutboundDefaultsToUseIPv4(t *testing.T) {
+func TestBuildOutboundDefaultsToForceIPv4(t *testing.T) {
 	opts := &conf.Options{
 		SendIP:      "0.0.0.0",
 		XrayOptions: conf.NewXrayOptions(),
@@ -84,10 +84,10 @@ func TestBuildOutboundDefaultsToUseIPv4(t *testing.T) {
 	}
 	sc := raw.(*proxyman.SenderConfig)
 	if sc.StreamSettings == nil || sc.StreamSettings.SocketSettings == nil {
-		t.Fatalf("expected SocketSettings for default UseIPv4 strategy, got %+v", sc.StreamSettings)
+		t.Fatalf("expected SocketSettings for default ForceIPv4 strategy, got %+v", sc.StreamSettings)
 	}
-	if got := sc.StreamSettings.SocketSettings.DomainStrategy; got != internet.DomainStrategy_USE_IP4 {
-		t.Fatalf("expected DomainStrategy_USE_IP4, got %v", got)
+	if got := sc.StreamSettings.SocketSettings.DomainStrategy; got != internet.DomainStrategy_FORCE_IP4 {
+		t.Fatalf("expected DomainStrategy_FORCE_IP4, got %v", got)
 	}
 
 	opts.XrayOptions.EnableDNS = false
@@ -106,7 +106,7 @@ func TestBuildOutboundDefaultsToUseIPv4(t *testing.T) {
 	}
 }
 
-func TestBuildCustomOutboundsDefaultsIPv4OutToUseIPv4(t *testing.T) {
+func TestBuildCustomOutboundsDefaultsIPv4OutToForceIPv4(t *testing.T) {
 	raw := `[
 		{"tag":"IPv4_out","protocol":"freedom","settings":{}},
 		{"tag":"IPv6_out","protocol":"freedom","settings":{"domainStrategy":"UseIPv6"}},
@@ -126,8 +126,8 @@ func TestBuildCustomOutboundsDefaultsIPv4OutToUseIPv4(t *testing.T) {
 	}
 	sc := rawSC.(*proxyman.SenderConfig)
 	if sc.StreamSettings == nil || sc.StreamSettings.SocketSettings == nil ||
-		sc.StreamSettings.SocketSettings.DomainStrategy != internet.DomainStrategy_USE_IP4 {
-		t.Fatalf("expected IPv4_out to default to USE_IP4, got %+v", sc.StreamSettings)
+		sc.StreamSettings.SocketSettings.DomainStrategy != internet.DomainStrategy_FORCE_IP4 {
+		t.Fatalf("expected IPv4_out to default to FORCE_IP4, got %+v", sc.StreamSettings)
 	}
 
 	rawV6, err := obs[1].SenderSettings.GetInstance()

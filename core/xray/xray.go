@@ -280,7 +280,7 @@ func buildCustomOutbounds(configs []coreConf.OutboundDetourConfig) ([]*core.Outb
 	for i := range configs {
 		cfg := configs[i]
 		if applyIPv4OutDefault(&cfg) {
-			log.Info("Custom outbound IPv4_out missing domainStrategy, defaulting to UseIPv4")
+			log.Info("Custom outbound IPv4_out missing domainStrategy, defaulting to ForceIPv4")
 		}
 		oc, err := cfg.Build()
 		if err != nil {
@@ -317,6 +317,6 @@ func applyIPv4OutDefault(cfg *coreConf.OutboundDetourConfig) bool {
 	if cfg.StreamSetting.SocketSettings == nil {
 		cfg.StreamSetting.SocketSettings = &coreConf.SocketConfig{}
 	}
-	cfg.StreamSetting.SocketSettings.DomainStrategy = "UseIPv4"
+	cfg.StreamSetting.SocketSettings.DomainStrategy = "ForceIPv4"
 	return true
 }
