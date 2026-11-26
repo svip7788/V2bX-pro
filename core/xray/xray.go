@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"sync"
 
 	"encoding/json/v2"
@@ -164,13 +165,9 @@ func getCore(c *conf.XrayConfig) *core.Instance {
 			}
 		}
 	}
-	var outBoundConfig []*core.OutboundHandlerConfig
-	for _, config := range coreCustomOutboundConfig {
-		oc, err := config.Build()
-		if err != nil {
-			log.WithField("err", err).Panic("Failed to understand Outbound config, Please check: https://xtls.github.io/config/outbound.html for help")
-		}
-		outBoundConfig = append(outBoundConfig, oc)
+	outBoundConfig, err := buildCustomOutbounds(coreCustomOutboundConfig)
+	if err != nil {
+		log.WithField("err", err).Panic("Failed to understand Outbound config, Please check: https://xtls.github.io/config/outbound.html for help")
 	}
 	// Policy config
 	levelPolicyConfig := parseConnectionConfig(c.ConnectionConfig)
@@ -276,4 +273,50 @@ func hasPublicIPv6() bool {
 		}
 	}
 	return false
+}
+
+func buildCustomOutbounds(configs []coreConf.OutboundDetourConfig) ([]*core.OutboundHandlerConfig, error) {
+	outBoundConfig := make([]*core.OutboundHandlerConfig, 0, len(configs))
+	for i := range configs {
+		cfg := configs[i]
+		if applyIPv4OutDefault(&cfg) {
+			log.Info("Custom outbound IPv4_out missing domainStrategy, defaulting to UseIPv4")
+		}
+		oc, err := cfg.Build()
+		if err != nil {
+			return nil, err
+		}
+		outBoundConfig = append(outBoundConfig, oc)
+	}
+	return outBoundConfig, nil
+}
+
+// 旧机器 custom_outbound.json 中 IPv4_out 常为空 settings:{}，未配策略时会退化成 AsIs 走系统双栈/IPv6
+func applyIPv4OutDefault(cfg *coreConf.OutboundDetourConfig) bool {
+	if cfg == nil || cfg.Tag != "IPv4_out" || !strings.EqualFold(cfg.Protocol, "freedom") {
+		return false
+	}
+	if strings.TrimSpace(cfg.TargetStrategy) != "" {
+		return false
+	}
+	if cfg.StreamSetting != nil && cfg.StreamSetting.SocketSettings != nil &&
+		strings.TrimSpace(cfg.StreamSetting.SocketSettings.DomainStrategy) != "" {
+		return false
+	}
+	if cfg.Settings != nil && len(*cfg.Settings) > 0 {
+		var fc coreConf.FreedomConfig
+		if err := json.Unmarshal(*cfg.Settings, &fc); err == nil {
+			if strings.TrimSpace(fc.DomainStrategy) != "" || strings.TrimSpace(fc.TargetStrategy) != "" {
+				return false
+			}
+		}
+	}
+	if cfg.StreamSetting == nil {
+		cfg.StreamSetting = &coreConf.StreamConfig{}
+	}
+	if cfg.StreamSetting.SocketSettings == nil {
+		cfg.StreamSetting.SocketSettings = &coreConf.SocketConfig{}
+	}
+	cfg.StreamSetting.SocketSettings.DomainStrategy = "UseIPv4"
+	return true
 }
