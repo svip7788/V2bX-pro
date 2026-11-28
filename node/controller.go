@@ -120,6 +120,7 @@ func (c *Controller) Start() error {
 	if err = l.UpdateRule(&node.Rules); err != nil {
 		return fmt.Errorf("update rule error: %s", err)
 	}
+	l.SetUserEgress(c.tag, node.UserEgress)
 	c.limiter = l
 	c.registerViolationSink()
 	c.info = node

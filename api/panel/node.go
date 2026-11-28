@@ -33,6 +33,7 @@ type NodeInfo struct {
 	DynamicSpeedLimit *DynamicSpeedLimit
 	IPWatch           *IPWatch
 	ConnLimit         *int
+	UserEgress        *UserEgress
 	// CoreHash 除可热更新项外的配置摘要，相同则无需重建入站
 	CoreHash string
 
@@ -70,6 +71,20 @@ type CommonNode struct {
 	IPWatch           *IPWatch           `json:"ip_watch"`
 	// ConnLimit 每个用户在本节点的并发连接数上限，0 为不限；未下发时用本地配置
 	ConnLimit *int `json:"conn_limit"`
+	// UserEgress 面板按用户指定的出口（独享 / 共享 IP），可热更新
+	UserEgress *UserEgress `json:"user_egress"`
+}
+
+// UserEgress Users 为面板用户 ID → 出口 ID；未列出的用户走默认出站
+type UserEgress struct {
+	Outbounds []EgressOutbound `json:"outbounds"`
+	Users     map[string]int   `json:"users"`
+}
+
+// EgressOutbound Outbound 写法同 proxy 路由组的 action_value，另支持 bind:IP（本机该 IP 直连出去）
+type EgressOutbound struct {
+	Id       int    `json:"id"`
+	Outbound string `json:"outbound"`
 }
 
 // IPWatch 频繁访问查询出口 IP 的目标时上报面板记录；未下发或 enable=false 为关闭
@@ -227,7 +242,7 @@ type RelayRule struct {
 }
 
 // hotReloadKeys 只影响限速/监控策略的配置项，变化时可原地生效，不必重建入站断开所有连接
-var hotReloadKeys = []string{"dynamic_speed_limit", "ip_watch", "conn_limit"}
+var hotReloadKeys = []string{"dynamic_speed_limit", "ip_watch", "conn_limit", "user_egress"}
 
 // coreConfigHash 去掉 hotReloadKeys 后的配置摘要；解析失败返回空串，按需要重建处理
 func coreConfigHash(body []byte) string {
@@ -437,6 +452,7 @@ func (c *Client) GetNodeInfo(ctx context.Context) (node *NodeInfo, err error) {
 	node.DynamicSpeedLimit = cm.DynamicSpeedLimit
 	node.IPWatch = cm.IPWatch
 	node.ConnLimit = cm.ConnLimit
+	node.UserEgress = cm.UserEgress
 
 	// set interval
 	node.PushInterval = intervalToTime(cm.BaseConfig.PushInterval)

@@ -27,6 +27,8 @@ type Core interface {
 	CloseUserIPConns(tag string, uuid string, match func(ip string) bool) int
 	// ActiveUserIPs 返回仍有活跃连接的来源 IP（uuid → ips），只含做过设备数检查的连接
 	ActiveUserIPs(tag string) map[string][]string
+	// UpdateUserEgress 增量同步按用户出口的出站，不重建入站
+	UpdateUserEgress(tag string, e *panel.UserEgress)
 	Protocols() []string
 	Type() string
 }

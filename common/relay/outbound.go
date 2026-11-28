@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -14,28 +15,40 @@ const (
 	TypeShadowsocks = "shadowsocks"
 	TypeSocks       = "socks"
 	TypeHTTP        = "http"
+	TypeFreedom     = "freedom"
 )
+
+const bindPrefix = "bind:"
 
 // Outbound 面板 action_value 的三种写法：
 //
 //	ss://method:password@host:port（userinfo 可为 base64）、socks5://user:pass@host:port、http://user:pass@host:port
 //	{...}  内核原生出站 JSON（xray 用 protocol，sing-box 用 type）
+//	bind:IP 用本机的该 IP 直连出去
 //	其他   引用本机配置里已有的出站 tag
 type Outbound struct {
-	Type     string
-	Server   string
-	Port     uint16
-	Method   string
-	Username string
-	Password string
-	Raw      json.RawMessage
-	Ref      string
+	Type        string
+	Server      string
+	Port        uint16
+	Method      string
+	Username    string
+	Password    string
+	SendThrough netip.Addr
+	Raw         json.RawMessage
+	Ref         string
 }
 
 func ParseOutbound(v string) (*Outbound, error) {
 	v = strings.TrimSpace(v)
 	if v == "" {
 		return nil, fmt.Errorf("empty outbound")
+	}
+	if ip, ok := strings.CutPrefix(v, bindPrefix); ok {
+		addr, err := netip.ParseAddr(strings.Trim(strings.TrimSpace(ip), "[]"))
+		if err != nil {
+			return nil, fmt.Errorf("invalid bind ip %q", ip)
+		}
+		return &Outbound{Type: TypeFreedom, SendThrough: addr.Unmap()}, nil
 	}
 	if strings.HasPrefix(v, "{") {
 		if !json.Valid([]byte(v)) {
@@ -120,4 +133,13 @@ func Tag(nodeTag string, routeId int) string {
 
 func TagPrefix(nodeTag string) string {
 	return nodeTag + "|relay|"
+}
+
+// EgressTag 节点按用户出口的出站 tag，删除节点时按 EgressTagPrefix 清理
+func EgressTag(nodeTag string, id int) string {
+	return EgressTagPrefix(nodeTag) + strconv.Itoa(id)
+}
+
+func EgressTagPrefix(nodeTag string) string {
+	return nodeTag + "|egress|"
 }

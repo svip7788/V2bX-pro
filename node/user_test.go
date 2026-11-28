@@ -44,6 +44,7 @@ func (f *fakeCore) CloseUserConns(string, string) int { return 0 }
 
 func (f *fakeCore) ActiveUserIPs(string) map[string][]string               { return nil }
 func (f *fakeCore) CloseUserIPConns(string, string, func(string) bool) int { return 0 }
+func (f *fakeCore) UpdateUserEgress(string, *panel.UserEgress)             {}
 
 func (f *fakeCore) Protocols() []string { return nil }
 

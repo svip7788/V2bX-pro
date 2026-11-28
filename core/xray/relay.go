@@ -22,6 +22,20 @@ func buildRelayOutbound(tag string, o *relay.Outbound) (*core.OutboundHandlerCon
 		if detour.Protocol == "" {
 			return nil, fmt.Errorf("outbound json missing protocol (xray format)")
 		}
+	} else if o.Type == relay.TypeFreedom {
+		ip := o.SendThrough.String()
+		strategy := "ForceIPv4"
+		if o.SendThrough.Is6() {
+			strategy = "ForceIPv6"
+		}
+		raw, err := json.Marshal(map[string]any{"domainStrategy": strategy})
+		if err != nil {
+			return nil, err
+		}
+		msg := json.RawMessage(raw)
+		detour.Protocol = relay.TypeFreedom
+		detour.SendThrough = &ip
+		detour.Settings = &msg
 	} else {
 		settings := map[string]any{"address": o.Server, "port": o.Port}
 		switch o.Type {

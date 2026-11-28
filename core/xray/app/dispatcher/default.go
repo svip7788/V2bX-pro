@@ -13,6 +13,7 @@ import (
 	"github.com/InazumaV/V2bX/common/counter"
 	"github.com/InazumaV/V2bX/common/probe"
 	"github.com/InazumaV/V2bX/common/rate"
+	"github.com/InazumaV/V2bX/common/relay"
 	"github.com/InazumaV/V2bX/common/violation"
 	"github.com/InazumaV/V2bX/limiter"
 	llog "github.com/sirupsen/logrus"
@@ -669,7 +670,10 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 	}
 
 	if l != nil && !isBlackhole(handler) {
-		if h := d.relayHandler(ctx, l, inTag, destination, ob); h != nil {
+		if h := d.egressHandler(ctx, l, sessionInbound, destination); h != nil {
+			handler = h
+			isPickRoute = 2
+		} else if h := d.relayHandler(ctx, l, inTag, destination, ob); h != nil {
 			handler = h
 			isPickRoute = 2
 		} else {
@@ -708,6 +712,31 @@ func isBlackhole(h outbound.Handler) bool {
 	}
 	_, block := g.GetOutbound().(*blackhole.Handler)
 	return block
+}
+
+// egressHandler 用户买了独享 / 共享 IP 时换成其出口出站，优先于 proxy 路由组；出站缺失则保持原路由
+func (d *DefaultDispatcher) egressHandler(ctx context.Context, l *limiter.Limiter, in *session.Inbound, destination net.Destination) outbound.Handler {
+	if in == nil || in.User == nil || in.User.Email == "" {
+		return nil
+	}
+	if destination.Address.Family().IsDomain() {
+		if relay.BypassHost(destination.Address.Domain()) {
+			return nil
+		}
+	} else if ip, ok := netip.AddrFromSlice(destination.Address.IP()); ok && relay.Bypass(ip.Unmap()) {
+		return nil
+	}
+	tag := l.MatchEgress(in.User.Email)
+	if tag == "" {
+		return nil
+	}
+	h := d.ohm.GetHandler(tag)
+	if h == nil {
+		errors.LogWarning(ctx, "egress outbound not found: ", tag)
+		return nil
+	}
+	errors.LogInfo(ctx, "egress [", tag, "] for [", destination, "]")
+	return h
 }
 
 // relayHandler 面板 proxy 路由组命中时换成对应的转发出站；出站缺失则保持原路由

@@ -39,6 +39,8 @@ type Xray struct {
 	dispatcher                *dispatcher.DefaultDispatcher
 	users                     *UserMap
 	nodeReportMinTrafficBytes map[string]int64
+	egressMu                  sync.Mutex
+	egress                    map[string]map[string]string // 节点 tag -> 出口出站 tag -> 面板写法
 }
 
 type UserMap struct {
@@ -53,6 +55,7 @@ func New(c *conf.CoreConfig) (vCore.Core, error) {
 			uidMap: make(map[string]int),
 		},
 		nodeReportMinTrafficBytes: make(map[string]int64),
+		egress:                    make(map[string]map[string]string),
 	}, nil
 }
 

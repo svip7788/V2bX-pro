@@ -35,6 +35,7 @@ func (c *Xray) AddNode(tag string, info *panel.NodeInfo, config *conf.Options) e
 		return fmt.Errorf("add outbound error: %s", err)
 	}
 	c.addRelayOutbounds(tag, info.Rules.Relay)
+	c.UpdateUserEgress(tag, info.UserEgress)
 	c.users.mapLock.Lock()
 	c.nodeReportMinTrafficBytes[tag] = config.ReportMinTraffic * 1024
 	c.users.mapLock.Unlock()
@@ -83,6 +84,7 @@ func (c *Xray) DelNode(tag string) error {
 	}
 	err = c.removeOutbound(tag)
 	c.removeRelayOutbounds(tag)
+	c.UpdateUserEgress(tag, nil)
 	c.dispatcher.Counter.Delete(tag)
 	prefix := tag + "|"
 	c.dispatcher.LinkManagers.Range(func(key, value interface{}) bool {

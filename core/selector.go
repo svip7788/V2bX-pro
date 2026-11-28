@@ -181,6 +181,12 @@ func (s *Selector) ActiveUserIPs(tag string) map[string][]string {
 	return t.(Core).ActiveUserIPs(tag)
 }
 
+func (s *Selector) UpdateUserEgress(tag string, e *panel.UserEgress) {
+	if t, ok := s.nodes.Load(tag); ok {
+		t.(Core).UpdateUserEgress(tag, e)
+	}
+}
+
 func (s *Selector) Protocols() []string {
 	protocols := make([]string, 0)
 	for i := range s.cores {

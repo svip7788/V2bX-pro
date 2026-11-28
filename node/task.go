@@ -162,6 +162,8 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 		c.applyDynamicSpeedLimit(newN)
 		c.applyIPWatch(newN)
 		c.applyConnLimit(newN)
+		c.server.UpdateUserEgress(c.tag, newN.UserEgress)
+		c.limiter.SetUserEgress(c.tag, newN.UserEgress)
 		if c.limiter.SetDynamicConfig(&c.LimitConfig) {
 			c.resetDynamicTraffic()
 		}
@@ -234,6 +236,7 @@ func (c *Controller) nodeInfoMonitor() (err error) {
 			}).Error("Update Rule failed")
 			return nil
 		}
+		c.limiter.SetUserEgress(c.tag, newN.UserEgress)
 
 		// check cert
 		c.applyPanelCertConfig(newN)

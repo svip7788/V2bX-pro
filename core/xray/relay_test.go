@@ -12,6 +12,8 @@ func TestBuildRelayOutbound(t *testing.T) {
 		"socks5://u:p@1.2.3.4:1080",
 		"http://1.2.3.4:3128",
 		`{"protocol":"freedom","settings":{"domainStrategy":"UseIPv6"}}`,
+		"bind:1.2.3.4",
+		"bind:[2001:db8::1]",
 	} {
 		o, err := relay.ParseOutbound(v)
 		if err != nil {
