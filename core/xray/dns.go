@@ -8,11 +8,15 @@ import (
 	"encoding/json"
 
 	"github.com/InazumaV/V2bX/api/panel"
+	"github.com/InazumaV/V2bX/conf"
 	log "github.com/sirupsen/logrus"
 	coreConf "github.com/xtls/xray-core/infra/conf"
 )
 
 func updateDNSConfig(node *panel.NodeInfo) (err error) {
+	if !conf.CustomDNSAllowed() {
+		return nil
+	}
 	dnsPath := os.Getenv("XRAY_DNS_PATH")
 	if len(node.RawDNS.DNSJson) != 0 {
 		var prettyJSON bytes.Buffer

@@ -3,10 +3,12 @@ package limiter
 import (
 	"net/netip"
 	"regexp"
+	"sync"
 
 	"github.com/InazumaV/V2bX/api/panel"
 	"github.com/InazumaV/V2bX/common/relay"
 	"github.com/InazumaV/V2bX/common/resolver"
+	"github.com/InazumaV/V2bX/conf"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -15,6 +17,8 @@ type relayRule struct {
 	ref     string
 	matcher *relay.Matcher
 }
+
+var dnsRuleIgnored sync.Once
 
 type dnsRule struct {
 	matcher  *relay.Matcher
@@ -115,8 +119,16 @@ func (l *Limiter) UpdateRule(rule *panel.Rules) error {
 			relayRules = append(relayRules, relayRule{id: r.Id, ref: o.Ref, matcher: m})
 		}
 	}
-	dnsRules := make([]dnsRule, 0, len(rule.DNS))
-	for _, r := range rule.DNS {
+	dnsSource := rule.DNS
+	if len(dnsSource) != 0 && !conf.CustomDNSAllowed() {
+		// 只走本机系统 DNS，面板 dns 路由不生效
+		dnsRuleIgnored.Do(func() {
+			log.Warn("Custom DNS is disabled, panel dns routes are ignored")
+		})
+		dnsSource = nil
+	}
+	dnsRules := make([]dnsRule, 0, len(dnsSource))
+	for _, r := range dnsSource {
 		res, err := resolver.Get(r.Server)
 		if err != nil {
 			log.WithFields(log.Fields{"route": r.Id, "err": err}).Warn("Skip invalid dns server")

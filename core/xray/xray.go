@@ -93,33 +93,7 @@ func getCore(c *conf.XrayConfig) *core.Instance {
 		ErrorLog:  c.LogConfig.ErrorPath,
 	}
 	// DNS config
-	coreDnsConfig := &coreConf.DNSConfig{}
-	os.Setenv("XRAY_DNS_PATH", "")
-	if dnsConfigPath != "" {
-		data, err := os.ReadFile(dnsConfigPath)
-		if err != nil {
-			log.Error(fmt.Sprintf("Failed to read xray dns config file: %v", err))
-			coreDnsConfig = &coreConf.DNSConfig{}
-		} else {
-			if err := json.Unmarshal(data, coreDnsConfig); err != nil {
-				log.Error(fmt.Sprintf("Failed to unmarshal xray dns config: %v. Using default DNS options.", err))
-				coreDnsConfig = &coreConf.DNSConfig{}
-			} else if isLegacyDefaultDNS(data) {
-				log.WithField("path", dnsConfigPath).Warn("Legacy default DNS config (public resolvers first) found, switching to system resolver")
-				coreDnsConfig.Servers = defaultDNSServers()
-				migrateLegacyDNSFile(dnsConfigPath, data)
-			}
-		}
-		os.Setenv("XRAY_DNS_PATH", dnsConfigPath)
-	}
-	if len(coreDnsConfig.Servers) == 0 {
-		coreDnsConfig.Servers = defaultDNSServers()
-		log.Info("No custom DNS configured, using system resolver")
-	}
-	if coreDnsConfig.QueryStrategy == "" && !hasPublicIPv6() {
-		coreDnsConfig.QueryStrategy = "UseIPv4"
-		log.Info("No public IPv6 detected, DNS QueryStrategy set to UseIPv4")
-	}
+	coreDnsConfig := loadDNSConfig(dnsConfigPath)
 	dnsConfig, err := coreDnsConfig.Build()
 	if err != nil {
 		log.WithField("err", err).Panic("Failed to understand DNS config, Please check: https://xtls.github.io/config/dns.html for help")
@@ -245,6 +219,41 @@ func (c *Xray) Protocols() []string {
 
 func (c *Xray) Type() string {
 	return "xray"
+}
+
+// loadDNSConfig 读取 dns.json。默认（AllowCustomDNS 未开）整个文件被忽略，只用本机系统解析器，
+// 也不设置 XRAY_DNS_PATH，面板下发的 DNS 配置因此不会写回文件。
+func loadDNSConfig(dnsConfigPath string) *coreConf.DNSConfig {
+	coreDnsConfig := &coreConf.DNSConfig{}
+	os.Setenv("XRAY_DNS_PATH", "")
+	if dnsConfigPath != "" && !conf.CustomDNSAllowed() {
+		log.WithField("path", dnsConfigPath).Warn("Custom DNS is disabled, ignoring DNS config file and using system resolver only")
+	} else if dnsConfigPath != "" {
+		data, err := os.ReadFile(dnsConfigPath)
+		if err != nil {
+			log.Error(fmt.Sprintf("Failed to read xray dns config file: %v", err))
+			coreDnsConfig = &coreConf.DNSConfig{}
+		} else {
+			if err := json.Unmarshal(data, coreDnsConfig); err != nil {
+				log.Error(fmt.Sprintf("Failed to unmarshal xray dns config: %v. Using default DNS options.", err))
+				coreDnsConfig = &coreConf.DNSConfig{}
+			} else if isLegacyDefaultDNS(data) {
+				log.WithField("path", dnsConfigPath).Warn("Legacy default DNS config (public resolvers first) found, switching to system resolver")
+				coreDnsConfig.Servers = defaultDNSServers()
+				migrateLegacyDNSFile(dnsConfigPath, data)
+			}
+		}
+		os.Setenv("XRAY_DNS_PATH", dnsConfigPath)
+	}
+	if len(coreDnsConfig.Servers) == 0 {
+		coreDnsConfig.Servers = defaultDNSServers()
+		log.Info("No custom DNS configured, using system resolver")
+	}
+	if coreDnsConfig.QueryStrategy == "" && !hasPublicIPv6() {
+		coreDnsConfig.QueryStrategy = "UseIPv4"
+		log.Info("No public IPv6 detected, DNS QueryStrategy set to UseIPv4")
+	}
+	return coreDnsConfig
 }
 
 func defaultDNSServers() []*coreConf.NameServerConfig {

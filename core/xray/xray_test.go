@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/InazumaV/V2bX/api/panel"
 	"github.com/InazumaV/V2bX/conf"
 	"github.com/xtls/xray-core/app/proxyman"
 	coreConf "github.com/xtls/xray-core/infra/conf"
@@ -212,4 +213,45 @@ func TestMigrateLegacyDNSFile(t *testing.T) {
 	if backup, _ := os.ReadFile(path + ".legacy"); string(backup) != string(old) {
 		t.Fatalf("backup=%s", backup)
 	}
+}
+
+func TestLoadDNSConfigForcesSystemResolver(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dns.json")
+	custom := `{"servers":[{"address":"https://dns.example.com/dns-query","domains":["geosite:netflix"]},"9.9.9.9"],"hosts":{"example.com":"1.2.3.4"},"tag":"dns_inbound"}`
+	if err := os.WriteFile(path, []byte(custom), 0644); err != nil {
+		t.Fatal(err)
+	}
+	localOnly := func(c *coreConf.DNSConfig) bool {
+		return len(c.Servers) == 1 && c.Servers[0].Address.String() == "localhost"
+	}
+
+	// 默认：dns.json 整个被忽略，文件不改，面板也写不回去
+	c := loadDNSConfig(path)
+	if !localOnly(c) || c.Hosts != nil || c.Tag != "" {
+		t.Fatalf("custom dns.json must be ignored, got servers=%d hosts=%v tag=%q", len(c.Servers), c.Hosts, c.Tag)
+	}
+	if got := os.Getenv("XRAY_DNS_PATH"); got != "" {
+		t.Fatalf("XRAY_DNS_PATH = %q, want empty", got)
+	}
+	if err := updateDNSConfig(&panel.NodeInfo{RawDNS: panel.RawDNS{DNSJson: []byte(`{"servers":["8.8.8.8"]}`)}}); err != nil {
+		t.Fatalf("panel dns must be ignored, got %v", err)
+	}
+	if data, _ := os.ReadFile(path); string(data) != custom {
+		t.Fatalf("dns.json changed: %s", data)
+	}
+	if _, err := c.Build(); err != nil {
+		t.Fatal(err)
+	}
+
+	// AllowCustomDNS 打开后才按文件来
+	conf.SetAllowCustomDNS(true)
+	defer conf.SetAllowCustomDNS(false)
+	c = loadDNSConfig(path)
+	if len(c.Servers) != 2 || c.Tag != "dns_inbound" {
+		t.Fatalf("custom dns.json should be used, got servers=%d tag=%q", len(c.Servers), c.Tag)
+	}
+	if got := os.Getenv("XRAY_DNS_PATH"); got != path {
+		t.Fatalf("XRAY_DNS_PATH = %q, want %q", got, path)
+	}
+	os.Setenv("XRAY_DNS_PATH", "")
 }

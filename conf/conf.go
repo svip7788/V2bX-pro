@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync/atomic"
 
 	"github.com/InazumaV/V2bX/common/json5"
 
@@ -18,6 +19,20 @@ type Conf struct {
 	MachineConfig *MachineConfig `json:"Machine"`
 	// 同一台机器接入多个面板（多站），第一个站在 Machine，其余在此追加
 	MachineConfigs []*MachineConfig `json:"Machines"`
+	// 默认所有域名解析只走本机系统 DNS（/etc/resolv.conf，机房的解锁 DNS 配在这里），
+	// dns.json 和面板下发的 dns 路由一律忽略；设为 true 才恢复自定义 DNS
+	AllowCustomDNS bool `json:"AllowCustomDNS"`
+}
+
+var allowCustomDNS atomic.Bool
+
+// CustomDNSAllowed 为 false 时只用本机系统 DNS
+func CustomDNSAllowed() bool {
+	return allowCustomDNS.Load()
+}
+
+func SetAllowCustomDNS(v bool) {
+	allowCustomDNS.Store(v)
 }
 
 // Machines 返回所有启用的机器配置，同一面板地址只保留第一个
@@ -72,5 +87,6 @@ func (p *Conf) LoadFromPath(filePath string) error {
 		return fmt.Errorf("unmarshal config error: %s", err)
 	}
 	p.dropLegacyCores()
+	SetAllowCustomDNS(p.AllowCustomDNS)
 	return nil
 }

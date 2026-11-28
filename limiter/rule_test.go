@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/InazumaV/V2bX/api/panel"
+	"github.com/InazumaV/V2bX/conf"
 )
 
 func TestAllowBitTorrentFollowsRules(t *testing.T) {
@@ -21,12 +22,22 @@ func TestAllowBitTorrentFollowsRules(t *testing.T) {
 }
 
 func TestMatchDNS(t *testing.T) {
-	l := &Limiter{}
-	err := l.UpdateRule(&panel.Rules{DNS: []panel.DNSRule{
+	rules := &panel.Rules{DNS: []panel.DNSRule{
 		{Id: 1, Match: []string{"netflix.com", "full:nflxvideo.net"}, Server: "https://dns.example.com/dns-query"},
 		{Id: 2, Match: []string{"bad.com"}, Server: "quic+local://x"},
-	}})
-	if err != nil {
+	}}
+	// 默认只走本机系统 DNS，面板 dns 路由不生效
+	l := &Limiter{}
+	if err := l.UpdateRule(rules); err != nil {
+		t.Fatal(err)
+	}
+	if r := l.MatchDNS("www.netflix.com"); r != nil {
+		t.Fatalf("dns route should be ignored by default, got %v", r)
+	}
+
+	conf.SetAllowCustomDNS(true)
+	defer conf.SetAllowCustomDNS(false)
+	if err := l.UpdateRule(rules); err != nil {
 		t.Fatal(err)
 	}
 	if r := l.MatchDNS("www.netflix.com"); r == nil || r.String() != "https://dns.example.com/dns-query" {
