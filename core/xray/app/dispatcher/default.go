@@ -670,7 +670,12 @@ func (d *DefaultDispatcher) routedDispatch(ctx context.Context, link *transport.
 	}
 
 	if l != nil && !isBlackhole(handler) {
-		if h := d.egressHandler(ctx, l, sessionInbound, destination); h != nil {
+		if h, matched := d.egressHandler(ctx, l, sessionInbound, destination); matched {
+			if h == nil {
+				common.Close(link.Writer)
+				common.Interrupt(link.Reader)
+				return
+			}
 			handler = h
 			isPickRoute = 2
 		} else if h := d.relayHandler(ctx, l, inTag, destination, ob); h != nil {
@@ -714,29 +719,30 @@ func isBlackhole(h outbound.Handler) bool {
 	return block
 }
 
-// egressHandler 用户买了独享 / 共享 IP 时换成其出口出站，优先于 proxy 路由组；出站缺失则保持原路由
-func (d *DefaultDispatcher) egressHandler(ctx context.Context, l *limiter.Limiter, in *session.Inbound, destination net.Destination) outbound.Handler {
+// egressHandler 用户买了独享 / 共享 IP 时换成其出口出站，优先于 proxy 路由组；
+// matched 为 true 而出站缺失时返回 nil，调用方须断开连接，不能回落到默认出口换成本机主 IP
+func (d *DefaultDispatcher) egressHandler(ctx context.Context, l *limiter.Limiter, in *session.Inbound, destination net.Destination) (outbound.Handler, bool) {
 	if in == nil || in.User == nil || in.User.Email == "" {
-		return nil
+		return nil, false
 	}
 	if destination.Address.Family().IsDomain() {
 		if relay.BypassHost(destination.Address.Domain()) {
-			return nil
+			return nil, false
 		}
 	} else if ip, ok := netip.AddrFromSlice(destination.Address.IP()); ok && relay.Bypass(ip.Unmap()) {
-		return nil
+		return nil, false
 	}
 	tag := l.MatchEgress(in.User.Email)
 	if tag == "" {
-		return nil
+		return nil, false
 	}
 	h := d.ohm.GetHandler(tag)
 	if h == nil {
-		errors.LogWarning(ctx, "egress outbound not found: ", tag)
-		return nil
+		errors.LogWarning(ctx, "egress outbound not found, connection dropped: ", tag)
+		return nil, true
 	}
 	errors.LogInfo(ctx, "egress [", tag, "] for [", destination, "]")
-	return h
+	return h, true
 }
 
 // relayHandler 面板 proxy 路由组命中时换成对应的转发出站；出站缺失则保持原路由
