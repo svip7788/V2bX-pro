@@ -104,6 +104,10 @@ func getCore(c *conf.XrayConfig) *core.Instance {
 			if err := json.Unmarshal(data, coreDnsConfig); err != nil {
 				log.Error(fmt.Sprintf("Failed to unmarshal xray dns config: %v. Using default DNS options.", err))
 				coreDnsConfig = &coreConf.DNSConfig{}
+			} else if isLegacyDefaultDNS(data) {
+				log.WithField("path", dnsConfigPath).Warn("Legacy default DNS config (public resolvers first) found, switching to system resolver")
+				coreDnsConfig.Servers = defaultDNSServers()
+				migrateLegacyDNSFile(dnsConfigPath, data)
 			}
 		}
 		os.Setenv("XRAY_DNS_PATH", dnsConfigPath)

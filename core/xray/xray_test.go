@@ -161,3 +161,55 @@ func TestBuildCustomOutboundsRespectsExplicitIPv4OutStrategy(t *testing.T) {
 		t.Fatalf("expected explicit AsIs to be preserved, got %v", sc.StreamSettings.SocketSettings.DomainStrategy)
 	}
 }
+
+func TestIsLegacyDefaultDNS(t *testing.T) {
+	cases := []struct {
+		name string
+		json string
+		want bool
+	}{
+		{"old installer", `{"servers":["1.1.1.1","8.8.8.8","localhost"],"tag":"dns_inbound"}`, true},
+		{"built-in doh list", `{"servers":["localhost","https://1.1.1.1/dns-query","tcp-tls://1.1.1.1","tcp://1.1.1.1","1.1.1.1","https://8.8.8.8/dns-query","tcp://8.8.8.8","8.8.8.8"],"queryStrategy":"UseIPv4","tag":"dns_inbound"}`, true},
+		{"system only", `{"servers":["localhost"],"tag":"dns_inbound"}`, false},
+		{"empty", `{}`, false},
+		{"other resolver", `{"servers":["9.9.9.9","localhost"]}`, false},
+		{"object server", `{"servers":[{"address":"1.1.1.1"},"localhost"]}`, false},
+		{"scoped server", `{"servers":[{"address":"1.1.1.1","domains":["geosite:netflix"]},"localhost"]}`, false},
+		{"has hosts", `{"servers":["1.1.1.1"],"hosts":{"a.com":"1.2.3.4"}}`, false},
+		{"invalid", `{bad`, false},
+	}
+	for _, c := range cases {
+		if got := isLegacyDefaultDNS([]byte(c.json)); got != c.want {
+			t.Errorf("%s: got %v want %v", c.name, got, c.want)
+		}
+	}
+}
+
+func TestMigrateLegacyDNSFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dns.json")
+	old := []byte(`{"servers":["1.1.1.1","8.8.8.8","localhost"],"queryStrategy":"UseIPv4","tag":"dns_inbound"}`)
+	if err := os.WriteFile(path, old, 0644); err != nil {
+		t.Fatal(err)
+	}
+	migrateLegacyDNSFile(path, old)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if isLegacyDefaultDNS(data) {
+		t.Fatalf("still legacy: %s", data)
+	}
+	cfg := &coreConf.DNSConfig{}
+	if err := json.Unmarshal(data, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Servers) != 1 || cfg.Servers[0].Address.String() != "localhost" || cfg.QueryStrategy != "UseIPv4" || cfg.Tag != "dns_inbound" {
+		t.Fatalf("cfg=%s", data)
+	}
+	if _, err := cfg.Build(); err != nil {
+		t.Fatal(err)
+	}
+	if backup, _ := os.ReadFile(path + ".legacy"); string(backup) != string(old) {
+		t.Fatalf("backup=%s", backup)
+	}
+}
