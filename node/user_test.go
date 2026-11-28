@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/InazumaV/V2bX/api/panel"
@@ -73,12 +74,11 @@ func newTestController(t *testing.T, url string, core *fakeCore) *Controller {
 }
 
 func TestReportUserTrafficTaskSkipsV1FallbackOnTransientV2Error(t *testing.T) {
-	v2Calls := 0
-	v1Calls := 0
+	var v2Calls, v1Calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v2/server/report":
-			v2Calls++
+			v2Calls.Add(1)
 			_, _ = io.ReadAll(r.Body)
 			_ = r.Body.Close()
 			hj, ok := w.(http.Hijacker)
@@ -91,7 +91,7 @@ func TestReportUserTrafficTaskSkipsV1FallbackOnTransientV2Error(t *testing.T) {
 			}
 			_ = conn.Close()
 		case "/api/v1/server/UniProxy/push":
-			v1Calls++
+			v1Calls.Add(1)
 			w.WriteHeader(http.StatusOK)
 		default:
 			t.Fatalf("unexpected path: %s", r.URL.Path)
@@ -107,11 +107,11 @@ func TestReportUserTrafficTaskSkipsV1FallbackOnTransientV2Error(t *testing.T) {
 	if err := controller.reportUserTrafficTask(); err != nil {
 		t.Fatalf("report user traffic task: %v", err)
 	}
-	if v2Calls != 1 {
-		t.Fatalf("expected 1 v2 report call, got %d", v2Calls)
+	if v2Calls.Load() != 1 {
+		t.Fatalf("expected 1 v2 report call, got %d", v2Calls.Load())
 	}
-	if v1Calls != 0 {
-		t.Fatalf("expected 0 v1 fallback calls, got %d", v1Calls)
+	if v1Calls.Load() != 0 {
+		t.Fatalf("expected 0 v1 fallback calls, got %d", v1Calls.Load())
 	}
 	if core.commitCalls != 0 {
 		t.Fatalf("expected no traffic commit on transient error, got %d", core.commitCalls)

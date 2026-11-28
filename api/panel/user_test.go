@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -233,14 +234,14 @@ func TestReportKeepsServerErrorsOutOfLegacyFallback(t *testing.T) {
 }
 
 func TestReportCanFailAfterServerProcessedBody(t *testing.T) {
-	requests := 0
+	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v2/server/report" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
 		_, _ = io.ReadAll(r.Body)
 		_ = r.Body.Close()
-		requests++
+		requests.Add(1)
 
 		hj, ok := w.(http.Hijacker)
 		if !ok {
@@ -268,8 +269,8 @@ func TestReportCanFailAfterServerProcessedBody(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected report error")
 	}
-	if requests != 1 {
-		t.Fatalf("expected server to process exactly 1 request, got %d", requests)
+	if requests.Load() != 1 {
+		t.Fatalf("expected server to process exactly 1 request, got %d", requests.Load())
 	}
 	if IsNotDelivered(err) {
 		t.Fatalf("processed request must not be treated as undelivered: %v", err)
