@@ -79,6 +79,8 @@ type CommonNode struct {
 type UserEgress struct {
 	Outbounds []EgressOutbound `json:"outbounds"`
 	Users     map[string]int   `json:"users"`
+	// Strict 节点只给买了 IP 的用户用，没分到出口的连接要拒绝
+	Strict bool `json:"strict"`
 }
 
 // EgressOutbound Outbound 写法同 proxy 路由组的 action_value，另支持 bind:IP（本机该 IP 直连出去）

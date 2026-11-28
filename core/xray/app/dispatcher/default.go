@@ -732,9 +732,13 @@ func (d *DefaultDispatcher) egressHandler(ctx context.Context, l *limiter.Limite
 	} else if ip, ok := netip.AddrFromSlice(destination.Address.IP()); ok && relay.Bypass(ip.Unmap()) {
 		return nil, false
 	}
-	tag := l.MatchEgress(in.User.Email)
-	if tag == "" {
+	tag, matched := l.MatchEgress(in.User.Email)
+	if !matched {
 		return nil, false
+	}
+	if tag == "" {
+		errors.LogInfo(ctx, "no egress assigned on strict node, connection dropped")
+		return nil, true
 	}
 	h := d.ohm.GetHandler(tag)
 	if h == nil {

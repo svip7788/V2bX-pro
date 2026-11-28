@@ -49,8 +49,8 @@ type Limiter struct {
 	btBanDuration  time.Duration
 	btBanned       sync.Map // taguuid -> int64 (ban expiry, unix nano)
 	allowBT        atomic.Bool
-	connLimit      atomic.Int64                   // 节点默认的用户并发连接数上限，面板可热更新
-	egressUsers    atomic.Pointer[map[int]string] // 面板用户 ID -> 出口出站 tag
+	connLimit      atomic.Int64 // 节点默认的用户并发连接数上限，面板可热更新
+	egressUsers    atomic.Pointer[egressTable]
 }
 
 const bucketFillInterval = 50 * time.Millisecond
